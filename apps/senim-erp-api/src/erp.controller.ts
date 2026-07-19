@@ -9,7 +9,7 @@ import crypto from 'crypto';
 @Controller('api')
 @UseGuards(AuthGuard)
 export class ErpController {
-  private publisher = new EventBusPublisher('crm-integration-bus');
+  private publisher = new EventBusPublisher();
 
   constructor(private readonly prismaService: TenantPrismaService) {}
 
@@ -113,17 +113,17 @@ export class ErpController {
 
     // Publish event back to CRM
     const paymentEvent: IntegrationEvent<InvoicePaidPayload> = {
-      id: crypto.randomUUID(),
-      type: 'invoice.paid',
-      version: '1.0.0',
+      eventId: crypto.randomUUID(),
+      eventType: 'invoice.paid',
       tenantId: req.user.tenantId,
       timestamp: new Date().toISOString(),
       payload: {
         invoiceId: id,
-        crmDealId: updated.crmDealId || undefined,
+        dealId: updated.crmDealId || '',
         amountPaid: amountPay,
         totalAmount: invoiceTotal,
-        status: nextStatus
+        paymentStatus: nextStatus === 'PAID' ? 'paid' : 'partially_paid',
+        erpDocumentId: id
       }
     };
 
@@ -189,16 +189,15 @@ export class ErpController {
 
     // Fire shipment completion event to CRM
     const shipmentEvent: IntegrationEvent<ShipmentCompletedPayload> = {
-      id: crypto.randomUUID(),
-      type: 'shipment.completed',
-      version: '1.0.0',
+      eventId: crypto.randomUUID(),
+      eventType: 'shipment.completed',
       tenantId: req.user.tenantId,
       timestamp: new Date().toISOString(),
       payload: {
         waybillId: id,
-        crmDealId: waybill.crmDealId || undefined,
+        dealId: waybill.crmDealId || '',
         customerId: waybill.customerId,
-        status: 'DELIVERED',
+        fulfillmentStatus: 'delivered',
         deliveredAt: new Date().toISOString()
       }
     };

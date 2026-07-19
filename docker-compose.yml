@@ -39,7 +39,7 @@ services:
       - ./scripts:/app/scripts
     ports:
       - "13579:13579"
-    command: node scripts/ncalayer-mock.js
+    command: sh -c "npm install ws && node scripts/ncalayer-mock.js"
     restart: always
 
 volumes:

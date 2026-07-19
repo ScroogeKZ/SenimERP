@@ -18,9 +18,9 @@ export const redisConnection: ConnectionOptions = {
 export class EventBusPublisher {
   private queue: Queue;
 
-  constructor(queueName = 'integration-bus') {
+  constructor(queueName = 'integration-bus', connectionOpts?: ConnectionOptions) {
     this.queue = new Queue(queueName, {
-      connection: new Redis(redisConnection as any),
+      connection: new Redis((connectionOpts || redisConnection) as any),
       defaultJobOptions: {
         attempts: 3, // Retry 3 times
         backoff: {
@@ -38,7 +38,7 @@ export class EventBusPublisher {
    * Leverages BullMQ jobId for deduplication (idempotency).
    */
   async publishEvent<T>(event: IntegrationEvent<T>): Promise<void> {
-    await this.queue.add(event.type, event, { jobId: event.id });
+    await this.queue.add(event.eventType, event, { jobId: event.eventId });
   }
 
   async close(): Promise<void> {
@@ -54,20 +54,42 @@ export type EventHandler<T = any> = (event: IntegrationEvent<T>) => Promise<void
 export class EventBusSubscriber {
   private worker: Worker;
 
-  constructor(queueName = 'integration-bus', handlers: Record<string, EventHandler>) {
+  constructor(
+    queueName = 'integration-bus',
+    handlers: Record<string, EventHandler>,
+    connectionOpts?: ConnectionOptions
+  ) {
+    const redisConn = connectionOpts || redisConnection;
     this.worker = new Worker(
       queueName,
       async (job: Job) => {
         const event = job.data as IntegrationEvent;
-        const handler = handlers[event.type];
+        const handler = handlers[event.eventType];
         if (handler) {
           await handler(event);
         } else {
-          console.warn(`No handler registered for event type: ${event.type}`);
+          console.warn(`No handler registered for event type: ${event.eventType} on queue ${queueName}`);
+          const forwardCount = (event as any)._forwardCount || 0;
+          if (forwardCount < 10) {
+            const forwardedEvent = {
+              ...event,
+              _forwardCount: forwardCount + 1,
+            };
+            const queue = new Queue(queueName, {
+              connection: new Redis(redisConn as any),
+            });
+            await queue.add(event.eventType, forwardedEvent, {
+              jobId: `${event.eventId}-fwd-${forwardCount + 1}`,
+              delay: 200,
+            });
+            await queue.close();
+          } else {
+            console.error(`Event ${event.eventId} (type: ${event.eventType}) exceeded max forward attempts. Discarding.`);
+          }
         }
       },
       {
-        connection: new Redis(redisConnection as any),
+        connection: new Redis(redisConn as any),
         concurrency: 1, // Handle sequentially (context cache protection)
       }
     );

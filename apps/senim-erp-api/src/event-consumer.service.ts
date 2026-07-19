@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { EventBusSubscriber } from '@senimerp/event-bus-client';
+import { EventBusSubscriber, redisConnection } from '@senimerp/event-bus-client';
 import { DealWonPayload, ClientSyncedPayload, IntegrationEvent } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
 
@@ -11,11 +11,11 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     // Start Event Bus subscriber mapping handlers
-    this.subscriber = new EventBusSubscriber('erp-integration-bus', {
+    this.subscriber = new EventBusSubscriber(undefined, {
       'deal.won': this.handleDealWon.bind(this),
       'client.created': this.handleClientSynced.bind(this),
       'client.updated': this.handleClientSynced.bind(this)
-    });
+    }, { ...redisConnection, db: 1 } as any);
     console.log('[EventConsumer] BullMQ subscriber started for Integration Bus');
   }
 
@@ -29,7 +29,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
    * Processes a client synchronization event from CRM.
    */
   async handleClientSynced(event: IntegrationEvent<ClientSyncedPayload>) {
-    const { tenantId, id: eventId } = event;
+    const { tenantId, eventId } = event;
     const { customerId, name, bin, address, email, phone } = event.payload;
 
     console.log(`[EventConsumer] Processing client sync event: ${eventId} (Tenant: ${tenantId})`);
@@ -44,7 +44,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
         await tx.processedEvent.create({
           data: {
             id: eventId,
-            eventType: event.type
+            eventType: event.eventType
           }
         });
 
@@ -83,7 +83,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
    * Processes a deal won event, splitting products into Invoices, Waybills, and Service Acts.
    */
   async handleDealWon(event: IntegrationEvent<DealWonPayload>) {
-    const { tenantId, id: eventId } = event;
+    const { tenantId, eventId } = event;
     const { dealId, customerId, customerName, customerBin, customerAddress, customerEmail, customerPhone, items } = event.payload;
 
     console.log(`[EventConsumer] Processing deal.won event: ${eventId} (Deal: ${dealId})`);
@@ -97,7 +97,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
         await tx.processedEvent.create({
           data: {
             id: eventId,
-            eventType: event.type
+            eventType: event.eventType
           }
         });
 

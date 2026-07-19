@@ -153,11 +153,10 @@ async function runTest() {
 
   // 3.1 Verify Event Idempotency (Duplicate Delivery)
   console.log('[Test] Re-publishing the same deal.won event to verify idempotency...');
-  const duplicatePublisher = new EventBusPublisher('erp-integration-bus');
+  const duplicatePublisher = new EventBusPublisher();
   await duplicatePublisher.publishEvent({
-    id: winData.eventId, // Same event ID to trigger deduplication logic
-    type: 'deal.won',
-    version: '1.0.0',
+    eventId: winData.eventId, // Same event ID to trigger deduplication logic
+    eventType: 'deal.won',
     tenantId,
     timestamp: new Date().toISOString(),
     payload: {
@@ -241,7 +240,7 @@ async function runTest() {
     const res = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
     if (!res.ok) return null;
     const deal = await res.json() as any;
-    return deal.paymentStatus === 'PARTIALLY_PAID' ? deal : null;
+    return deal.paymentStatus === 'partially_paid' ? deal : null;
   });
   console.log('✓ CRM partial payment status update verification verified.');
 
@@ -269,7 +268,7 @@ async function runTest() {
     const res = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
     if (!res.ok) return null;
     const deal = await res.json() as any;
-    return deal.paymentStatus === 'PAID' ? deal : null;
+    return deal.paymentStatus === 'paid' ? deal : null;
   });
   console.log('✓ CRM final payment status update verification verified.');
 

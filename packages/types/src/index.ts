@@ -35,11 +35,10 @@ export interface SsoJwtPayload {
 
 // Integration Event Header Structure
 export interface IntegrationEvent<T = any> {
-  id: string;          // Unique Event UUID for idempotency / deduplication
-  type: string;        // Event topic / type, e.g. "deal.won"
-  version: string;     // Schema version, e.g. "1.0.0"
-  tenantId: string;    // Target Tenant ID
-  timestamp: string;   // ISO string timestamp
+  eventId: string;          // Unique Event UUID for idempotency / deduplication
+  eventType: string;        // Event topic / type, e.g. "deal.won"
+  tenantId: string;         // Target Tenant ID
+  timestamp: string;        // ISO string timestamp
   payload: T;
 }
 
@@ -50,7 +49,7 @@ export interface DealWonLineItem {
   name: string;
   quantity: number;
   price: number;       // Price excluding VAT
-  vatRate: number;     // e.g. 12.00
+  vatRate?: number;    // e.g. 12.00 (optional, default will be 12%)
 }
 
 export interface DealWonPayload {
@@ -77,28 +76,26 @@ export interface ClientSyncedPayload {
 
 // Invoice Paid Event Payload (ERP -> CRM)
 export interface InvoicePaidPayload {
+  dealId: string;
+  paymentStatus: 'paid' | 'partially_paid';
+  erpDocumentId: string;
   invoiceId: string;
-  crmDealId?: string; // If invoice originated from a CRM deal
   amountPaid: number;
   totalAmount: number;
-  status: 'PAID' | 'PARTIALLY_PAID';
 }
 
-// Stock Level Changed Event Payload (ERP -> CRM or CRM -> ERP)
+// Stock Level Changed Event Payload (ERP -> CRM)
 export interface StockLevelChangedPayload {
   sku: string;
-  crmProductId: string;
-  warehouseId: string;
-  oldAvailable: number;
-  newAvailable: number;
-  isCritical: boolean; // Flag if below threshold
+  quantity: number;
+  reserved?: number;
 }
 
 // Shipment Completed Event Payload (ERP -> CRM)
 export interface ShipmentCompletedPayload {
   waybillId: string;
-  crmDealId?: string;
+  dealId?: string;
   customerId: string;
-  status: 'DELIVERED';
+  fulfillmentStatus: 'delivered';
   deliveredAt: string;
 }
