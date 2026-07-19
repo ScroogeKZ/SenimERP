@@ -8,6 +8,19 @@ async function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function pollUntil<T>(
+  fn: () => Promise<T | null | undefined>,
+  { timeoutMs = 10000, intervalMs = 300 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<T> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = await fn();
+    if (result) return result;
+    await delay(intervalMs);
+  }
+  throw new Error(`pollUntil timed out after ${timeoutMs}ms`);
+}
+
 async function runTest() {
   console.log('=== STARTING END-TO-END INTEGRATION TEST ===');
 
@@ -93,13 +106,14 @@ async function runTest() {
   const winData = (await winRes.json()) as any;
   console.log(`[Test] CRM deal won and event published with ID: ${winData.eventId}`);
 
+  const db = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } } });
+
   // Wait for BullMQ worker to consume event
   console.log('[Test] Waiting for ERP subscriber to process event...');
-  await delay(4000);
+  await pollUntil(() => db.processedEvent.findUnique({ where: { id: winData.eventId } }));
 
   // 3. Verify Database records
   console.log('[Test] Querying database for generated documents...');
-  const db = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } } });
   
   const processed = await db.processedEvent.findUnique({ where: { id: winData.eventId } });
   if (!processed) {
@@ -136,6 +150,40 @@ async function runTest() {
     throw new Error('Verification Failed: Service Act contains incorrect service item SKU.');
   }
   console.log('✓ Service Act Line Items verified (contained only services).');
+
+  // 3.1 Verify Event Idempotency (Duplicate Delivery)
+  console.log('[Test] Re-publishing the same deal.won event to verify idempotency...');
+  const duplicatePublisher = new EventBusPublisher('erp-integration-bus');
+  await duplicatePublisher.publishEvent({
+    id: winData.eventId, // Same event ID to trigger deduplication logic
+    type: 'deal.won',
+    version: '1.0.0',
+    tenantId,
+    timestamp: new Date().toISOString(),
+    payload: {
+      dealId: 'deal_integration_999',
+      customerId: 'crm_cust_999',
+      customerName: 'ИП Прогресс РК',
+      customerBin: '850412300999',
+      customerAddress: 'Казахстан, г. Нур-Султан, ул. Достык 10',
+      amount: 1450000,
+      items: [
+        { sku: 'HW-ROUTER-01', crmProductId: 'prod_router', name: 'Маршрутизатор Cisco ISR', quantity: 2, price: 500000, vatRate: 12 },
+        { sku: 'SRV-ROUTER-CONF', crmProductId: 'prod_conf', name: 'Услуга настройки маршрутизатора', quantity: 1, price: 450000, vatRate: 12 }
+      ]
+    }
+  });
+
+  await delay(2000); // Give the event bus worker time to process the duplicate
+
+  const invoicesAfterDuplicate = await db.invoice.findMany({ where: { crmDealId: 'deal_integration_999' } });
+  if (invoicesAfterDuplicate.length !== 1) {
+    throw new Error(
+      `Verification Failed: idempotency broken — expected 1 invoice after duplicate event, found ${invoicesAfterDuplicate.length}.`
+    );
+  }
+  console.log('✓ Idempotency verified: duplicate deal.won event did not create a second Invoice.');
+  await duplicatePublisher.close();
 
   // 4. Simulate NCALayer Signing via REST endpoints
   console.log('[Test] Simulating NCALayer signing on Invoice...');
@@ -189,17 +237,12 @@ async function runTest() {
 
   // Wait for partial payment event to travel back to CRM API and update CRM DB
   console.log('[Test] Waiting for CRM API to process ERP partial payment event...');
-  await delay(2000);
-
-  const crmRes1 = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
-  if (!crmRes1.ok) {
-    throw new Error('Verification Failed: Failed to query CRM deal for partial payment.');
-  }
-
-  const crmDeal1 = await crmRes1.json();
-  if (crmDeal1.paymentStatus !== 'PARTIALLY_PAID') {
-    throw new Error(`Verification Failed: CRM deal payment status is ${crmDeal1.paymentStatus} instead of PARTIALLY_PAID.`);
-  }
+  const crmDeal1 = await pollUntil(async () => {
+    const res = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
+    if (!res.ok) return null;
+    const deal = await res.json() as any;
+    return deal.paymentStatus === 'PARTIALLY_PAID' ? deal : null;
+  });
   console.log('✓ CRM partial payment status update verification verified.');
 
   // 6. Simulate Final Payment to reach full amount
@@ -222,17 +265,12 @@ async function runTest() {
 
   // Wait for final payment event to travel back to CRM API and update CRM DB
   console.log('[Test] Waiting for CRM API to process ERP final payment event...');
-  await delay(2000);
-
-  const crmRes2 = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
-  if (!crmRes2.ok) {
-    throw new Error('Verification Failed: Failed to query CRM deal for final payment.');
-  }
-
-  const crmDeal2 = await crmRes2.json();
-  if (crmDeal2.paymentStatus !== 'PAID') {
-    throw new Error(`Verification Failed: CRM deal payment status is ${crmDeal2.paymentStatus} instead of PAID.`);
-  }
+  const crmDeal2 = await pollUntil(async () => {
+    const res = await fetch(`http://localhost:3002/api/deals/deal_integration_999`);
+    if (!res.ok) return null;
+    const deal = await res.json() as any;
+    return deal.paymentStatus === 'PAID' ? deal : null;
+  });
   console.log('✓ CRM final payment status update verification verified.');
 
   console.log('=== ALL INTEGRATION TESTS PASSED SUCCESSFULLY! ===');

@@ -6,9 +6,19 @@ export class TenantPrismaService implements OnModuleDestroy {
   private clients = new Map<string, PrismaClient>();
 
   /**
+   * Enforces strict alphanumeric format with dashes and underscores to prevent SQL injection in DDL queries.
+   */
+  private assertValidTenantId(tenantId: string): void {
+    if (!/^[a-zA-Z0-9_-]{1,63}$/.test(tenantId)) {
+      throw new Error(`Invalid tenantId format: ${tenantId}`);
+    }
+  }
+
+  /**
    * Retrieves or creates a PrismaClient instance isolated to the tenant's specific schema.
    */
   getClient(tenantId: string): PrismaClient {
+    this.assertValidTenantId(tenantId);
     const schema = `tenant_${tenantId}`;
     if (!this.clients.has(schema)) {
       const baseDbUrl = process.env.DATABASE_BASE_URL || 'postgresql://postgres:postgres@localhost:5434/senimerp_dev';
@@ -33,6 +43,7 @@ export class TenantPrismaService implements OnModuleDestroy {
    * Runs raw SQL DDL directly against the database to construct isolated tables dynamically.
    */
   async ensureTenantSchema(tenantId: string): Promise<void> {
+    this.assertValidTenantId(tenantId);
     const schema = `tenant_${tenantId}`;
     const baseDbUrl = process.env.DATABASE_BASE_URL || 'postgresql://postgres:postgres@localhost:5434/senimerp_dev';
     const baseClient = new PrismaClient({

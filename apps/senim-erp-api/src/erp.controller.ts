@@ -93,24 +93,23 @@ export class ErpController {
     if (!amountPay || amountPay <= 0) throw new BadRequestException('Valid payment amount is required');
     const db = this.getDb(req);
 
-    const invoice = await db.invoice.findUnique({ where: { id }, include: { customer: true } });
-    if (!invoice) throw new NotFoundException('Invoice not found');
+    // Atomic increment and status calculation in a single UPDATE — eliminates lost update anomalies
+    const rows = await db.$queryRaw<Array<any>>`
+      UPDATE "Invoice"
+      SET "paidAmount" = "paidAmount" + ${amountPay},
+          "status" = CASE
+            WHEN "paidAmount" + ${amountPay} >= "amount" THEN 'PAID'
+            ELSE 'PARTIALLY_PAID'
+          END,
+          "updatedAt" = now()
+      WHERE id = ${id}
+      RETURNING *;
+    `;
 
-    const newPaidAmount = Number(invoice.paidAmount) + amountPay;
-    const invoiceTotal = Number(invoice.amount);
-
-    let nextStatus: 'PARTIALLY_PAID' | 'PAID' = 'PARTIALLY_PAID';
-    if (newPaidAmount >= invoiceTotal) {
-      nextStatus = 'PAID';
-    }
-
-    const updated = await db.invoice.update({
-      where: { id },
-      data: {
-        paidAmount: newPaidAmount,
-        status: nextStatus
-      }
-    });
+    if (rows.length === 0) throw new NotFoundException('Invoice not found');
+    const updated = rows[0];
+    const invoiceTotal = Number(updated.amount);
+    const nextStatus = updated.status as 'PARTIALLY_PAID' | 'PAID';
 
     // Publish event back to CRM
     const paymentEvent: IntegrationEvent<InvoicePaidPayload> = {
@@ -121,7 +120,7 @@ export class ErpController {
       timestamp: new Date().toISOString(),
       payload: {
         invoiceId: id,
-        crmDealId: invoice.crmDealId || undefined,
+        crmDealId: updated.crmDealId || undefined,
         amountPaid: amountPay,
         totalAmount: invoiceTotal,
         status: nextStatus
@@ -129,7 +128,7 @@ export class ErpController {
     };
 
     await this.publisher.publishEvent(paymentEvent);
-    console.log(`[ERP API] Processed payment of ${amountPay} KZT for Invoice ${invoice.number}. Status: ${nextStatus}. Fired event.`);
+    console.log(`[ERP API] Processed payment of ${amountPay} KZT for Invoice ${updated.number}. Status: ${nextStatus}. Fired event.`);
 
     return updated;
   }

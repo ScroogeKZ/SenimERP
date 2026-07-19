@@ -39,39 +39,44 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     const db = this.prismaService.getClient(tenantId);
 
     try {
-      // Check event idempotency
-      await db.processedEvent.create({
-        data: {
-          id: eventId,
-          eventType: event.type
-        }
+      await db.$transaction(async (tx: any) => {
+        // Idempotency check inside transaction
+        await tx.processedEvent.create({
+          data: {
+            id: eventId,
+            eventType: event.type
+          }
+        });
+
+        // Upsert customer record
+        await tx.customer.upsert({
+          where: { bin },
+          update: {
+            crmId: customerId,
+            name,
+            address,
+            email,
+            phone
+          },
+          create: {
+            crmId: customerId,
+            name,
+            bin,
+            address,
+            email,
+            phone
+          }
+        });
       });
-    } catch (e) {
-      console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
-      return;
-    }
 
-    // Upsert customer record
-    await db.customer.upsert({
-      where: { bin },
-      update: {
-        crmId: customerId,
-        name,
-        address,
-        email,
-        phone
-      },
-      create: {
-        crmId: customerId,
-        name,
-        bin,
-        address,
-        email,
-        phone
+      console.log(`[EventConsumer] Customer ${name} (BIN: ${bin}) synced successfully.`);
+    } catch (e: any) {
+      if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
+        console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
+        return;
       }
-    });
-
-    console.log(`[EventConsumer] Customer ${name} (BIN: ${bin}) synced successfully.`);
+      throw e;
+    }
   }
 
   /**
@@ -86,22 +91,17 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
 
-    // Guard: Deduplicate event
     try {
-      await db.processedEvent.create({
-        data: {
-          id: eventId,
-          eventType: event.type
-        }
-      });
-    } catch (e) {
-      console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
-      return;
-    }
+      // Run dynamic transaction to write all ERP documents
+      await db.$transaction(async (tx: any) => {
+        await tx.processedEvent.create({
+          data: {
+            id: eventId,
+            eventType: event.type
+          }
+        });
 
-    // Run dynamic transaction to write all ERP documents
-    await db.$transaction(async (tx: any) => {
-      // 1. Ensure customer exists
+        // 1. Ensure customer exists
       const customer = await tx.customer.upsert({
         where: { bin: customerBin },
         update: {
@@ -260,5 +260,12 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     });
 
     console.log(`[EventConsumer] Event deal.won processed successfully. Database transaction completed.`);
+    } catch (e: any) {
+      if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
+        console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
+        return;
+      }
+      throw e;
+    }
   }
 }
