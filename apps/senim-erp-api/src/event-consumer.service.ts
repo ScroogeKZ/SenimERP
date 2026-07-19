@@ -15,7 +15,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
       'deal.won': this.handleDealWon.bind(this),
       'client.created': this.handleClientSynced.bind(this),
       'client.updated': this.handleClientSynced.bind(this)
-    }, { ...redisConnection, db: 1 } as any);
+    });
     console.log('[EventConsumer] BullMQ subscriber started for Integration Bus');
   }
 

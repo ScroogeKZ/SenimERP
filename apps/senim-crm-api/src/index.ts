@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = 3002;
 
-const publisher = new EventBusPublisher(undefined, { ...redisConnection, db: 1 } as any);
+const publisher = new EventBusPublisher();
 
 // In-memory simulator of CRM deal states
 const MOCK_DEALS = new Map<string, { 
@@ -95,7 +95,7 @@ new EventBusSubscriber(undefined, {
       console.log(`[CRM API Subscriber] Event 'shipment.completed' processed. Deal ${dealId} shipment: ${deal.shipmentStatus}`);
     }
   }
-}, { ...redisConnection, db: 0 } as any);
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Mock CRM API running on http://localhost:${PORT}`);
