@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background: radial-gradient(circle at top right, #111827, #030712);
+    min-height: 100vh;
+    color: #f3f4f6;
+  }
+}
+
+.glass {
+  background: rgba(17, 24, 39, 0.7);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glow-indigo {
+  transition: all 0.3s ease;
+}
+.glow-indigo:hover {
+  box-shadow: 0 0 25px rgba(99, 102, 241, 0.35);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.glow-emerald {
+  transition: all 0.3s ease;
+}
+.glow-emerald:hover {
+  box-shadow: 0 0 25px rgba(16, 185, 129, 0.35);
+  border-color: rgba(16, 185, 129, 0.3);
+}

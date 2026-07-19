@@ -1,0 +1,163 @@
+// apps/senim-erp-api/prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  crmId     String?  @unique // Link to CRM client card
+  name      String
+  bin       String   @unique // BIN/IIN (94-V compliance)
+  address   String?
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  invoices  Invoice[]
+  waybills  Waybill[]
+  acts      ServiceAct[]
+}
+
+model Invoice {
+  id             String            @id @default(uuid())
+  number         String            @unique // Readable invoice number e.g. "INV-2026-0001"
+  customerId     String
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  amount         Decimal           @db.Decimal(15, 2) // Total invoice amount
+  vatAmount      Decimal           @db.Decimal(15, 2) // Total VAT amount
+  paidAmount     Decimal           @default(0.00) @db.Decimal(15, 2)
+  status         InvoiceStatus     @default(DRAFT)
+  issueDate      DateTime          @default(now())
+  dueDate        DateTime
+  items          InvoiceLineItem[]
+  signedXml      String?           @db.Text // Signed XML storage
+  signature      DocumentSignature?
+  crmDealId      String?           // Back-link to CRM deal
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model InvoiceLineItem {
+  id             String   @id @default(uuid())
+  invoiceId      String
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sku            String   // SKU of item referencing CRM catalog
+  crmProductId   String?  // Optional direct link to CRM product
+  name           String   // Snapshot of the name at document creation
+  quantity       Decimal  @db.Decimal(12, 3)
+  price          Decimal  @db.Decimal(15, 2) // Price excluding VAT
+  vatRate        Decimal  @db.Decimal(5, 2)  // e.g. 12.00%
+  vatAmount      Decimal  @db.Decimal(15, 2)
+  totalAmount    Decimal  @db.Decimal(15, 2) // Line total including VAT
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Waybill {
+  id             String            @id @default(uuid())
+  number         String            @unique // Readable waybill number e.g. "WAY-2026-0001"
+  customerId     String
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  amount         Decimal           @db.Decimal(15, 2)
+  vatAmount      Decimal           @db.Decimal(15, 2)
+  status         WaybillStatus     @default(DRAFT)
+  issueDate      DateTime          @default(now())
+  items          WaybillLineItem[]
+  signedXml      String?           @db.Text
+  signature      DocumentSignature?
+  crmDealId      String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model WaybillLineItem {
+  id             String   @id @default(uuid())
+  waybillId      String
+  waybill        Waybill  @relation(fields: [waybillId], references: [id], onDelete: Cascade)
+  sku            String
+  crmProductId   String?
+  name           String
+  quantity       Decimal  @db.Decimal(12, 3)
+  price          Decimal  @db.Decimal(15, 2)
+  vatRate        Decimal  @db.Decimal(5, 2)
+  vatAmount      Decimal  @db.Decimal(15, 2)
+  totalAmount    Decimal  @db.Decimal(15, 2)
+}
+
+enum WaybillStatus {
+  DRAFT
+  ISSUED
+  DELIVERED
+  CANCELLED
+}
+
+model ServiceAct {
+  id             String            @id @default(uuid())
+  number         String            @unique // e.g. "ACT-2026-0001"
+  customerId     String
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  amount         Decimal           @db.Decimal(15, 2)
+  vatAmount      Decimal           @db.Decimal(15, 2)
+  status         ActStatus         @default(DRAFT)
+  issueDate      DateTime          @default(now())
+  items          ActLineItem[]
+  signedXml      String?           @db.Text
+  signature      DocumentSignature?
+  crmDealId      String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model ActLineItem {
+  id             String      @id @default(uuid())
+  actId          String
+  act            ServiceAct  @relation(fields: [actId], references: [id], onDelete: Cascade)
+  sku            String      // SKU of service
+  crmProductId   String?
+  name           String      // Service description
+  quantity       Decimal     @db.Decimal(12, 3)
+  price          Decimal     @db.Decimal(15, 2)
+  vatRate        Decimal     @db.Decimal(5, 2)
+  vatAmount      Decimal     @db.Decimal(15, 2)
+  totalAmount    Decimal     @db.Decimal(15, 2)
+}
+
+enum ActStatus {
+  DRAFT
+  ISSUED
+  SIGNED_BY_CUSTOMER
+  CANCELLED
+}
+
+model DocumentSignature {
+  id          String      @id @default(uuid())
+  invoiceId   String?     @unique
+  invoice     Invoice?    @relation(fields: [invoiceId], references: [id])
+  waybillId   String?     @unique
+  waybill     Waybill?    @relation(fields: [waybillId], references: [id])
+  actId       String?     @unique
+  act         ServiceAct? @relation(fields: [actId], references: [id])
+  signedBy    String      // Signer Name
+  iin         String      // Signer IIN
+  certSerial  String      // Cert Serial
+  signedAt    DateTime    @default(now())
+}
+
+model ProcessedEvent {
+  id          String   @id // Event ID from Integration Bus (for deduplication)
+  eventType   String
+  processedAt DateTime @default(now())
+}

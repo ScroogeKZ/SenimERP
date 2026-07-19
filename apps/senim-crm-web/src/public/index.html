@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SenimCRM — Управление клиентами</title>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Tailwind CDN for fast prototyping -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Outfit', 'sans-serif'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    body {
+      background: radial-gradient(circle at top left, #1e1b4b, #090d16);
+      min-height: 100vh;
+      color: #f8fafc;
+    }
+    .glass {
+      background: rgba(30, 41, 59, 0.45);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glow-indigo:hover {
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+    }
+    .glow-green:hover {
+      box-shadow: 0 0 20px rgba(34, 197, 94, 0.4);
+    }
+    /* Simple micro-animations */
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+    .animate-pulse-slow {
+      animation: pulse-slow 3s infinite;
+    }
+  </style>
+</head>
+<body class="font-sans antialiased">
+
+  <!-- Main Grid Layout -->
+  <div class="min-height-screen flex flex-col">
+    
+    <!-- Top Navigation Bar -->
+    <header class="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center space-x-8">
+        <div class="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent">
+          SenimCRM
+        </div>
+        <nav class="flex space-x-6 text-sm font-semibold text-slate-400">
+          <a href="#" class="text-indigo-400 border-b-2 border-indigo-500 pb-1">Сделки</a>
+          <a href="#" class="hover:text-slate-200 transition-colors">Контакты</a>
+          <a href="#" class="hover:text-slate-200 transition-colors">Аналитика</a>
+        </nav>
+      </div>
+
+      <!-- App Switcher & SSO Status -->
+      <div class="flex items-center space-x-6">
+        <!-- Switcher to ERP -->
+        <a id="erpLink" href="#" class="text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-md border border-slate-700 hover:border-slate-500 bg-slate-900 text-slate-300 transition-all hover:bg-slate-800">
+          Войти в ERP ➔
+        </a>
+
+        <!-- SSO User Info -->
+        <div id="userBadge" class="flex items-center space-x-3 text-xs">
+          <div class="text-right">
+            <p id="userEmail" class="font-medium text-slate-200">Загрузка...</p>
+            <p id="userTenant" class="text-slate-400 text-[10px]">tenant_id</p>
+          </div>
+          <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-slate-100">
+            U
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-6 md:p-8 space-y-8">
+      
+      <!-- Top Alert for SSO -->
+      <div id="welcomeAlert" class="hidden p-4 rounded-xl glass border-indigo-500/20 bg-indigo-500/5 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <span class="flex h-3 w-3 relative">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
+          </span>
+          <p class="text-sm font-medium text-indigo-200">Вы успешно авторизовались через SSO. Добро пожаловать!</p>
+        </div>
+        <button onclick="this.parentElement.remove()" class="text-slate-400 hover:text-slate-200">×</button>
+      </div>
+
+      <!-- Overview Header -->
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 class="text-3xl font-extrabold tracking-tight">Рабочее пространство</h1>
+          <p class="text-slate-400 mt-1">Отслеживание сделок и автоматическая синхронизация с ERP в реальном времени.</p>
+        </div>
+        <!-- Event Bus Diagnostics -->
+        <div class="glass px-4 py-2.5 rounded-xl flex items-center space-x-3 text-xs">
+          <div class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse-slow"></div>
+          <span class="text-slate-300 font-medium">Integration Bus: Активен (BullMQ)</span>
+        </div>
+      </div>
+
+      <!-- Grid for Deal cards -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <!-- Left 2 Cols: Active Deals -->
+        <div class="lg:col-span-2 space-y-6">
+          <h2 class="text-xl font-bold">Активные сделки в воронке</h2>
+          
+          <!-- Test Deal Card -->
+          <div class="glass rounded-2xl p-6 space-y-6 relative overflow-hidden transition-all duration-300 hover:scale-[1.01] hover:border-slate-700">
+            <div class="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl -z-10"></div>
+            
+            <!-- Deal header -->
+            <div class="flex items-start justify-between">
+              <div>
+                <span class="px-2.5 py-1 text-[10px] font-bold tracking-wider uppercase rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  Согласование договора
+                </span>
+                <h3 class="text-xl font-bold mt-2 text-slate-100">Поставка IT-оборудования и инсталляция</h3>
+                <p class="text-sm text-slate-400 mt-0.5">Клиент: ТОО "КазТоргСнаб" (БИН: 990840001234)</p>
+              </div>
+              <div class="text-right">
+                <p class="text-2xl font-black text-slate-100">1,500,000 ₸</p>
+                <p class="text-xs text-slate-400 mt-0.5">с учётом НДС 12%</p>
+              </div>
+            </div>
+
+            <!-- Items breakdown -->
+            <div class="space-y-3">
+              <p class="text-xs font-bold uppercase tracking-wider text-slate-400">Спецификация товаров и услуг</p>
+              <div class="divide-y divide-slate-800 text-sm">
+                <!-- Item 1 -->
+                <div class="py-2.5 flex justify-between">
+                  <div>
+                    <p class="font-medium text-slate-200">Ноутбук ASUS ProArt 16</p>
+                    <p class="text-xs text-slate-500">SKU: HW-ASUS-PA16 | CRM ID: prod_asus_proart</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="font-medium text-slate-200">2 шт × 500,000 ₸</p>
+                    <p class="text-xs text-slate-500">НДС: 120,000 ₸</p>
+                  </div>
+                </div>
+                <!-- Item 2 -->
+                <div class="py-2.5 flex justify-between">
+                  <div>
+                    <p class="font-medium text-slate-200">Лицензия Windows 11 Pro</p>
+                    <p class="text-xs text-slate-500">SKU: SW-WIN11-PRO | CRM ID: prod_win11_pro</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="font-medium text-slate-200">2 шт × 50,000 ₸</p>
+                    <p class="text-xs text-slate-500">НДС: 12,000 ₸</p>
+                  </div>
+                </div>
+                <!-- Item 3 -->
+                <div class="py-2.5 flex justify-between">
+                  <div>
+                    <p class="font-medium text-slate-200">Услуга пусконаладки и настройки сети</p>
+                    <p class="text-xs text-slate-500">SKU: SRV-NET-INSTALL | CRM ID: prod_net_install</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="font-medium text-slate-200">1 усл × 400,000 ₸</p>
+                    <p class="text-xs text-slate-500">НДС: 48,000 ₸</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="pt-4 border-t border-slate-800 flex items-center justify-between">
+              <div class="flex space-x-4 text-xs text-slate-400">
+                <div>Оплата в CRM: <span id="crmPaymentStatus" class="font-bold text-rose-400">НЕ ОПЛАЧЕНО</span></div>
+                <div>Отгрузка в CRM: <span id="crmShipmentStatus" class="font-bold text-slate-400">НЕ ВЫПОЛНЕНО</span></div>
+              </div>
+              <button id="winDealBtn" onclick="winTestDeal()" class="glow-green font-bold text-sm bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-slate-950 px-6 py-2.5 rounded-xl transition-all duration-200 flex items-center space-x-2">
+                <span>Выиграть сделку (Win Deal)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Integration logs -->
+          <div class="glass rounded-2xl p-6 space-y-4">
+            <h3 class="text-lg font-bold">Событийный лог сделки</h3>
+            <div id="eventLogs" class="bg-slate-950/80 rounded-xl p-4 font-mono text-xs text-slate-300 space-y-2 max-h-40 overflow-y-auto">
+              <div class="text-slate-500">[Система] Ожидание действий пользователя...</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Right Col: Diagnostic & Help panel -->
+        <div class="space-y-6">
+          <h2 class="text-xl font-bold">Статус интеграции</h2>
+          
+          <div class="glass rounded-2xl p-6 space-y-6">
+            <div>
+              <h4 class="font-bold text-slate-200 text-sm">Связь доменов</h4>
+              <p class="text-xs text-slate-400 mt-1">При клике "Выиграть сделку" CRM API отправляет в BullMQ событие <code>deal.won</code>. ERP-система получает событие и создаёт:</p>
+              <ul class="list-disc list-inside text-xs text-slate-400 mt-2 space-y-1">
+                <li>Черновик счёта (1,500,000 ₸)</li>
+                <li>Черновик акта выполненных работ (для услуги)</li>
+                <li>Черновик накладной (для товаров)</li>
+              </ul>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 text-xs space-y-3">
+              <p class="font-bold text-slate-300">Демонстрационный сценарий:</p>
+              <ol class="list-decimal list-inside text-slate-400 space-y-1">
+                <li>Авторизуйтесь через SSO</li>
+                <li>Нажмите "Выиграть сделку"</li>
+                <li>Нажмите "Войти в ERP" вверху</li>
+                <li>Подпишите ЭСФ / Акт в ERP через мок NCALayer</li>
+                <li>Проведите оплату в ERP</li>
+                <li>Вернитесь в CRM и проверьте статус оплаты!</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </main>
+
+  </div>
+
+  <script>
+    let ssoToken = '';
+    let decodedUser = null;
+
+    // Check SSO Token on load
+    function initSso() {
+      const urlParams = new URLSearchParams(window.location.search);
+      ssoToken = urlParams.get('sso_token') || localStorage.getItem('sso_token');
+
+      if (!ssoToken) {
+        // Redirect to Auth service login page
+        const redirectUrl = window.location.href.split('?')[0];
+        window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(redirectUrl)}`;
+        return;
+      }
+
+      // Save token
+      localStorage.setItem('sso_token', ssoToken);
+      
+      // Decode JWT payload (simple client-side decode)
+      try {
+        const payloadBase64 = ssoToken.split('.')[1];
+        const payloadJson = JSON.parse(atob(payloadBase64));
+        decodedUser = payloadJson;
+        
+        document.getElementById('userEmail').innerText = decodedUser.email;
+        document.getElementById('userTenant').innerText = 'Тенант: ' + decodedUser.tenantId;
+        document.getElementById('welcomeAlert').classList.remove('hidden');
+
+        // Update ERP switcher link to pass the token
+        document.getElementById('erpLink').href = `http://localhost:3005?sso_token=${ssoToken}`;
+
+      } catch (err) {
+        console.error('Invalid token format', err);
+        localStorage.removeItem('sso_token');
+        window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(window.location.href.split('?')[0])}`;
+      }
+    }
+
+    // Refresh CRM statuses periodically to show updates from ERP
+    async function refreshDealStatus() {
+      if (!decodedUser) return;
+      
+      try {
+        const res = await fetch(`http://localhost:3002/api/deals/deal_test_101`);
+        if (res.ok) {
+          const deal = await res.json();
+          
+          const payEl = document.getElementById('crmPaymentStatus');
+          payEl.innerText = deal.paymentStatus;
+          if (deal.paymentStatus === 'PAID') {
+            payEl.className = 'font-bold text-green-400';
+          } else if (deal.paymentStatus === 'PARTIALLY_PAID') {
+            payEl.className = 'font-bold text-amber-400';
+          } else {
+            payEl.className = 'font-bold text-rose-400';
+          }
+
+          const shipEl = document.getElementById('crmShipmentStatus');
+          shipEl.innerText = deal.shipmentStatus === 'DELIVERED' ? 'ДОСТАВЛЕНО / ВЫПОЛНЕНО' : 'В ПРОЦЕССЕ';
+          if (deal.shipmentStatus === 'DELIVERED') {
+            shipEl.className = 'font-bold text-green-400';
+          } else {
+            shipEl.className = 'font-bold text-slate-400';
+          }
+        }
+      } catch (e) {
+        console.error('Failed to sync statuses', e);
+      }
+    }
+
+    // Trigger Win Deal
+    async function winTestDeal() {
+      if (!decodedUser) return;
+
+      const logContainer = document.getElementById('eventLogs');
+      logContainer.innerHTML += `<div class="text-indigo-400">[CRM] Запрос на перевод сделки deal_test_101 в статус WON...</div>`;
+
+      const dealData = {
+        dealId: 'deal_test_101',
+        tenantId: decodedUser.tenantId,
+        customerId: 'cust_kaztorgsnab_test',
+        customerName: 'ТОО КазТоргСнаб',
+        customerBin: '990840001234',
+        customerAddress: 'г. Алматы, пр. Аль-Фараби 77/7',
+        customerEmail: 'info@kaztorgsnab.kz',
+        customerPhone: '+7 (727) 333-2211',
+        amount: 1500000,
+        items: [
+          {
+            sku: 'HW-ASUS-PA16',
+            crmProductId: 'prod_asus_proart',
+            name: 'Ноутбук ASUS ProArt 16',
+            quantity: 2,
+            price: 500000,
+            vatRate: 12
+          },
+          {
+            sku: 'SW-WIN11-PRO',
+            crmProductId: 'prod_win11_pro',
+            name: 'Лицензия Windows 11 Pro',
+            quantity: 2,
+            price: 500000 / 10, // 50,000
+            vatRate: 12
+          },
+          {
+            sku: 'SRV-NET-INSTALL',
+            crmProductId: 'prod_net_install',
+            name: 'Услуга пусконаладки и настройки сети',
+            quantity: 1,
+            price: 400000,
+            vatRate: 12
+          }
+        ]
+      };
+
+      try {
+        const btn = document.getElementById('winDealBtn');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+
+        const response = await fetch('http://localhost:3002/api/deals/win', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(dealData)
+        });
+
+        const data = await response.json();
+        
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+
+        if (data.success) {
+          logContainer.innerHTML += `<div class="text-green-400">[Событие] Успешно опубликовано! ID: ${data.eventId}</div>`;
+          logContainer.innerHTML += `<div class="text-slate-300">[Диагностика] CRM Deal Status: WON. Перейдите в ERP для проверки счетов.</div>`;
+          
+          // Switch payment status to WON in display
+          refreshDealStatus();
+        } else {
+          logContainer.innerHTML += `<div class="text-red-400">[Ошибка] Не удалось опубликовать: ${data.error}</div>`;
+        }
+      } catch (err) {
+        logContainer.innerHTML += `<div class="text-red-400">[Ошибка] Сетевая ошибка: ${err.message}</div>`;
+      }
+    }
+
+    // Run Sso Check on load
+    window.addEventListener('DOMContentLoaded', () => {
+      initSso();
+      setInterval(refreshDealStatus, 3000); // Poll status changes
+    });
+  </script>
+</body>
+</html>
