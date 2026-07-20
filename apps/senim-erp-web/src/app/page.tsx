@@ -12,11 +12,22 @@ import {
   ChevronRight, 
   CheckCircle, 
   AlertTriangle,
-  ShoppingBag
+  ShoppingBag,
+  BarChart3,
+  Boxes
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid
+} from 'recharts';
 
 export default function ErpDashboard() {
-  const [activeTab, setActiveTab] = useState<'invoices' | 'waybills' | 'acts' | 'debtors' | 'purchasing'>('invoices');
+  const [activeTab, setActiveTab] = useState<'invoices' | 'waybills' | 'acts' | 'debtors' | 'purchasing' | 'analytics'>('invoices');
   const [ssoToken, setSsoToken] = useState<string>('');
   const [user, setUser] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -25,6 +36,15 @@ export default function ErpDashboard() {
   const [debtors, setDebtors] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
+
+  // BI Reports state
+  const [dashboardSummary, setDashboardSummary] = useState<any>(null);
+  const [revenueTrend, setRevenueTrend] = useState<any[]>([]);
+  const [topCustomers, setTopCustomers] = useState<any[]>([]);
+  const [topProducts, setTopProducts] = useState<any[]>([]);
+  const [arAging, setArAging] = useState<any>(null);
+  const [apAging, setApAging] = useState<any>(null);
+  const [stockHealth, setStockHealth] = useState<any[]>([]);
   
   // Modals / Details state
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
@@ -72,23 +92,50 @@ export default function ErpDashboard() {
     };
 
     try {
-      const invRes = await fetch('http://localhost:3004/api/invoices', { headers });
-      if (invRes.ok) setInvoices(await invRes.ok ? await invRes.json() : []);
+      const [
+        invRes,
+        wayRes,
+        actRes,
+        debtRes,
+        supRes,
+        poRes,
+        dashRes,
+        revRes,
+        custRes,
+        prodRes,
+        arRes,
+        apRes,
+        stockRes
+      ] = await Promise.all([
+        fetch('http://localhost:3004/api/invoices', { headers }),
+        fetch('http://localhost:3004/api/waybills', { headers }),
+        fetch('http://localhost:3004/api/acts', { headers }),
+        fetch('http://localhost:3004/api/debtors', { headers }),
+        fetch('http://localhost:3004/api/suppliers', { headers }),
+        fetch('http://localhost:3004/api/purchase-orders', { headers }),
+        fetch('http://localhost:3004/api/reports/dashboard-summary', { headers }),
+        fetch('http://localhost:3004/api/reports/revenue-trend?granularity=month', { headers }),
+        fetch('http://localhost:3004/api/reports/top-customers?limit=5', { headers }),
+        fetch('http://localhost:3004/api/reports/top-products?limit=5', { headers }),
+        fetch('http://localhost:3004/api/reports/ar-aging', { headers }),
+        fetch('http://localhost:3004/api/reports/ap-aging', { headers }),
+        fetch('http://localhost:3004/api/reports/stock-health', { headers })
+      ]);
 
-      const wayRes = await fetch('http://localhost:3004/api/waybills', { headers });
+      if (invRes.ok) setInvoices(await invRes.json());
       if (wayRes.ok) setWaybills(await wayRes.json());
-
-      const actRes = await fetch('http://localhost:3004/api/acts', { headers });
       if (actRes.ok) setActs(await actRes.json());
-
-      const debtRes = await fetch('http://localhost:3004/api/debtors', { headers });
       if (debtRes.ok) setDebtors(await debtRes.json());
-
-      const supRes = await fetch('http://localhost:3004/api/suppliers', { headers });
       if (supRes.ok) setSuppliers(await supRes.json());
-
-      const poRes = await fetch('http://localhost:3004/api/purchase-orders', { headers });
       if (poRes.ok) setPurchaseOrders(await poRes.json());
+
+      if (dashRes.ok) setDashboardSummary(await dashRes.json());
+      if (revRes.ok) setRevenueTrend(await revRes.json());
+      if (custRes.ok) setTopCustomers(await custRes.json());
+      if (prodRes.ok) setTopProducts(await prodRes.json());
+      if (arRes.ok) setArAging(await arRes.json());
+      if (apRes.ok) setApAging(await apRes.json());
+      if (stockRes.ok) setStockHealth(await stockRes.json());
     } catch (e) {
       console.error('Failed to fetch ERP data', e);
       triggerAlert('error', 'Ошибка подключения к ERP API. Убедитесь, что сервер API запущен.');
@@ -352,10 +399,10 @@ export default function ErpDashboard() {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex space-x-1 p-1 bg-slate-900 border border-slate-800 rounded-xl max-w-lg">
+        <div className="flex space-x-1 p-1 bg-slate-900 border border-slate-800 rounded-xl max-w-3xl overflow-x-auto">
           <button 
             onClick={() => setActiveTab('invoices')}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
               activeTab === 'invoices' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -364,7 +411,7 @@ export default function ErpDashboard() {
           </button>
           <button 
             onClick={() => setActiveTab('waybills')}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
               activeTab === 'waybills' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -373,7 +420,7 @@ export default function ErpDashboard() {
           </button>
           <button 
             onClick={() => setActiveTab('acts')}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
               activeTab === 'acts' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -382,7 +429,7 @@ export default function ErpDashboard() {
           </button>
           <button 
             onClick={() => setActiveTab('debtors')}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
               activeTab === 'debtors' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -391,12 +438,21 @@ export default function ErpDashboard() {
           </button>
           <button 
             onClick={() => setActiveTab('purchasing')}
-            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
               activeTab === 'purchasing' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <ShoppingBag className="w-4 h-4" />
             <span>Закупки</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('analytics')}
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 whitespace-nowrap ${
+              activeTab === 'analytics' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Аналитика</span>
           </button>
         </div>
 
@@ -635,10 +691,348 @@ export default function ErpDashboard() {
               </div>
             )}
 
+            {/* --- Analytics Tab --- */}
+            {activeTab === 'analytics' && (
+              <div className="space-y-6">
+                {/* 1. KPI Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="glass p-5 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-400">Выручка за месяц</span>
+                      <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
+                        <TrendingUp className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-2xl font-black tracking-tight text-slate-100">
+                        {dashboardSummary?.revenueThisMonth ? `${dashboardSummary.revenueThisMonth.toLocaleString('ru-RU')} ₸` : '0 ₸'}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Признанный доход за текущий месяц</p>
+                    </div>
+                  </div>
+
+                  <div className="glass p-5 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-400">Дебиторка (AR)</span>
+                      <div className="p-2 bg-rose-500/10 text-rose-400 rounded-lg">
+                        <CreditCard className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <p className={`text-2xl font-black tracking-tight ${
+                        (dashboardSummary?.arOutstandingTotal || 0) > 0 ? 'text-rose-400' : 'text-slate-100'
+                      }`}>
+                        {dashboardSummary?.arOutstandingTotal ? `${dashboardSummary.arOutstandingTotal.toLocaleString('ru-RU')} ₸` : '0 ₸'}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Непогашенная задолженность клиентов</p>
+                    </div>
+                  </div>
+
+                  <div className="glass p-5 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-400">Кредиторка (AP)</span>
+                      <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg">
+                        <ShoppingBag className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-2xl font-black tracking-tight text-slate-100">
+                        {dashboardSummary?.apOutstandingTotal ? `${dashboardSummary.apOutstandingTotal.toLocaleString('ru-RU')} ₸` : '0 ₸'}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">Долг перед поставщиками</p>
+                    </div>
+                  </div>
+
+                  <div className="glass p-5 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-400">Низкий остаток</span>
+                      <div className="p-2 bg-purple-500/10 text-purple-400 rounded-lg">
+                        <Package className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <p className={`text-2xl font-black tracking-tight ${
+                        (dashboardSummary?.lowStockItemCount || 0) > 0 ? 'text-amber-400' : 'text-slate-100'
+                      }`}>
+                        {dashboardSummary?.lowStockItemCount ?? 0} <span className="text-sm font-normal text-slate-400">SKU</span>
+                      </p>
+                      <div className="flex items-center space-x-1.5 mt-1">
+                        {dashboardSummary?.currencyExposureCurrencies?.map((cur: string) => (
+                          <span key={cur} className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-indigo-500/20 text-indigo-300">
+                            {cur}
+                          </span>
+                        ))}
+                        {(!dashboardSummary?.currencyExposureCurrencies || dashboardSummary.currencyExposureCurrencies.length === 0) && (
+                          <p className="text-[11px] text-slate-400">Товары под резервом</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Revenue Trend Chart */}
+                <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-100">Динамика выручки</h3>
+                      <p className="text-xs text-slate-400">Объем продаж по периодам (KZT)</p>
+                    </div>
+                    <span className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                      Группировка: по месяцам
+                    </span>
+                  </div>
+
+                  {revenueTrend.length > 0 ? (
+                    <div className="h-64 w-full pt-4">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={revenueTrend}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                          <XAxis dataKey="period" stroke="#64748b" fontSize={12} tickLine={false} />
+                          <YAxis stroke="#64748b" fontSize={12} tickLine={false} tickFormatter={(val) => `${val / 1000}k`} />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '0.75rem', color: '#f8fafc' }}
+                            formatter={(value: any) => [`${Number(value).toLocaleString('ru-RU')} ₸`, 'Выручка']}
+                            labelFormatter={(label) => `Период: ${label}`}
+                          />
+                          <Bar dataKey="revenue" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
+                      Нет данных о выручке за выбранный период
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Top Customers & Top Products */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Top Customers */}
+                  <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <h3 className="text-base font-bold text-slate-100 flex items-center space-x-2">
+                      <UserCheck className="w-5 h-5 text-indigo-400" />
+                      <span>Топ-5 Клиентов по выручке</span>
+                    </h3>
+                    <div className="space-y-3">
+                      {topCustomers.map((cust, idx) => (
+                        <div key={cust.customerId || idx} className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-300 font-bold text-xs flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-200">{cust.customerName}</p>
+                              <p className="text-[11px] text-slate-400">БИН/ИИН: {cust.bin || '—'} • {cust.invoiceCount} сч.</p>
+                            </div>
+                          </div>
+                          <span className="text-sm font-bold text-slate-100">
+                            {cust.totalRevenue?.toLocaleString('ru-RU')} ₸
+                          </span>
+                        </div>
+                      ))}
+                      {topCustomers.length === 0 && (
+                        <p className="text-slate-500 text-xs py-4 text-center">Нет данных о клиентах</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Top Products */}
+                  <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <h3 className="text-base font-bold text-slate-100 flex items-center space-x-2">
+                      <Package className="w-5 h-5 text-purple-400" />
+                      <span>Топ-5 Товаров и услуг</span>
+                    </h3>
+                    <div className="space-y-3">
+                      {topProducts.map((prod, idx) => (
+                        <div key={prod.sku || idx} className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <span className="w-6 h-6 rounded-full bg-purple-500/20 text-purple-300 font-bold text-xs flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-200">{prod.name}</p>
+                              <p className="text-[11px] text-slate-400">SKU: {prod.sku} • Продано: {prod.totalQuantity} ед.</p>
+                            </div>
+                          </div>
+                          <span className="text-sm font-bold text-slate-100">
+                            {prod.totalRevenue?.toLocaleString('ru-RU')} ₸
+                          </span>
+                        </div>
+                      ))}
+                      {topProducts.length === 0 && (
+                        <p className="text-slate-500 text-xs py-4 text-center">Нет данных о товарах</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. AR / AP Aging Tables */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* AR Aging */}
+                  <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-bold text-slate-100">Старение дебиторки (AR Aging)</h3>
+                      <span className="text-xs font-bold text-rose-400">
+                        Итого: {arAging?.totalOutstanding?.toLocaleString('ru-RU') || 0} ₸
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead className="text-[11px] uppercase bg-slate-900/80 text-slate-400 border-b border-slate-800">
+                          <tr>
+                            <th className="py-2.5 px-3">Интервал</th>
+                            <th className="py-2.5 px-3">Сумма долга</th>
+                            <th className="py-2.5 px-3 text-right">Счетов</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/50">
+                          {arAging?.buckets?.map((b: any) => {
+                            const isCurrent = b.bucket === 'current';
+                            const isMild = b.bucket === '1-30';
+                            const isSevere = b.bucket === '90+';
+
+                            return (
+                              <tr key={b.bucket} className="hover:bg-slate-900/40">
+                                <td className="py-2.5 px-3 font-semibold">
+                                  <span className={`px-2 py-0.5 rounded text-[11px] ${
+                                    isCurrent ? 'bg-slate-800 text-slate-300' :
+                                    isMild ? 'bg-amber-500/10 text-amber-400' :
+                                    isSevere ? 'bg-rose-500/20 text-rose-400 font-bold' :
+                                    'bg-rose-500/10 text-rose-300'
+                                  }`}>
+                                    {b.bucket === 'current' ? 'Текущие (в сроках)' : `${b.bucket} дней`}
+                                  </span>
+                                </td>
+                                <td className={`py-2.5 px-3 font-medium ${isSevere ? 'text-rose-400 font-bold' : 'text-slate-200'}`}>
+                                  {b.totalOutstanding?.toLocaleString('ru-RU')} ₸
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-400">{b.invoiceCount}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* AP Aging */}
+                  <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-bold text-slate-100">Старение кредиторки (AP Aging)</h3>
+                      <span className="text-xs font-bold text-indigo-400">
+                        Итого: {apAging?.totalOutstanding?.toLocaleString('ru-RU') || 0} ₸
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead className="text-[11px] uppercase bg-slate-900/80 text-slate-400 border-b border-slate-800">
+                          <tr>
+                            <th className="py-2.5 px-3">Интервал</th>
+                            <th className="py-2.5 px-3">Сумма долга</th>
+                            <th className="py-2.5 px-3 text-right">Счетов</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/50">
+                          {apAging?.buckets?.map((b: any) => {
+                            const isCurrent = b.bucket === 'current';
+                            const isMild = b.bucket === '1-30';
+                            const isSevere = b.bucket === '90+';
+
+                            return (
+                              <tr key={b.bucket} className="hover:bg-slate-900/40">
+                                <td className="py-2.5 px-3 font-semibold">
+                                  <span className={`px-2 py-0.5 rounded text-[11px] ${
+                                    isCurrent ? 'bg-slate-800 text-slate-300' :
+                                    isMild ? 'bg-amber-500/10 text-amber-400' :
+                                    isSevere ? 'bg-rose-500/20 text-rose-400 font-bold' :
+                                    'bg-amber-500/10 text-amber-300'
+                                  }`}>
+                                    {b.bucket === 'current' ? 'Текущие (в сроках)' : `${b.bucket} дней`}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 font-medium text-slate-200">
+                                  {b.totalOutstanding?.toLocaleString('ru-RU')} ₸
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-400">{b.invoiceCount}</td>
+                              </tr>
+                            );
+                          })}
+                          {apAging?.noDueDate && apAging.noDueDate.invoiceCount > 0 && (
+                            <tr className="hover:bg-slate-900/40">
+                              <td className="py-2.5 px-3 font-semibold">
+                                <span className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-400">
+                                  Без даты оплаты
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 font-medium text-slate-300">
+                                {apAging.noDueDate.totalOutstanding?.toLocaleString('ru-RU')} ₸
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-slate-400">{apAging.noDueDate.invoiceCount}</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Stock Health */}
+                <div className="glass p-6 rounded-2xl border border-slate-800 space-y-4">
+                  <h3 className="text-base font-bold text-slate-100 flex items-center space-x-2">
+                    <Boxes className="w-5 h-5 text-emerald-400" />
+                    <span>Складской аудит и критические остатки</span>
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="text-[11px] uppercase bg-slate-900/80 text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="py-3 px-4">Склад</th>
+                          <th className="py-3 px-4">Всего SKU</th>
+                          <th className="py-3 px-4">Общий остаток</th>
+                          <th className="py-3 px-4">В резерве</th>
+                          <th className="py-3 px-4 text-right">Низкий остаток (Low Stock)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {stockHealth.map((wh) => (
+                          <tr key={wh.warehouseId} className="hover:bg-slate-900/40">
+                            <td className="py-3 px-4 font-semibold text-slate-200">{wh.warehouseName}</td>
+                            <td className="py-3 px-4 text-slate-300">{wh.totalSkuCount}</td>
+                            <td className="py-3 px-4 font-medium text-slate-200">{wh.totalQuantity} ед.</td>
+                            <td className="py-3 px-4 text-slate-400">{wh.totalReserved} ед.</td>
+                            <td className="py-3 px-4 text-right">
+                              {wh.lowStockCount > 0 ? (
+                                <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+                                  {wh.lowStockCount} SKU под риском
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                  В норме
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {stockHealth.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-slate-500">
+                              Нет данных по складам
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
           </div>
 
           {/* Document Inspection Side Panel (1 col) */}
-          <div className="space-y-4">
+          {activeTab !== 'analytics' && (
+            <div className="space-y-4">
             <h2 className="text-xl font-bold">Детали документа</h2>
             
             {/* Invoice Detail Inspector */}
@@ -874,6 +1268,7 @@ export default function ErpDashboard() {
               </div>
             )}
 
+            {/* End of Inspection Side Panel */}
             {!selectedInvoice && !selectedWaybill && !selectedAct && (
               <div className="glass rounded-2xl p-6 text-center text-slate-500 text-xs">
                 Выберите документ в списке для детального просмотра и совершения действий.
@@ -881,6 +1276,7 @@ export default function ErpDashboard() {
             )}
 
           </div>
+          )}
 
         </div>
 
