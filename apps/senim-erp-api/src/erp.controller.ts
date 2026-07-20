@@ -1704,4 +1704,483 @@ export class ErpController {
       lineItemCount: r.lineItemCount
     }));
   }
+
+  // --- BI Reports: Module 1 (Revenue Trend) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/revenue-trend')
+  async getRevenueTrend(
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('granularity') granularity: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    try {
+      const db = await this.getDb(req);
+      return await this.calculateRevenueTrend(db, from, to, granularity);
+    } catch (err: any) {
+      console.error('[ERP API] getRevenueTrend error:', err);
+      throw err;
+    }
+  }
+
+  private async calculateRevenueTrend(
+    db: any,
+    from?: string,
+    to?: string,
+    granularity: string = 'month'
+  ) {
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    const gran = (granularity || 'month').toLowerCase();
+
+    const allInvoices = await db.invoice.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      }
+    });
+    const invoices = allInvoices.filter(
+      (inv: any) => inv.status !== 'DRAFT' && inv.status !== 'CANCELLED'
+    );
+
+    const periodMap = new Map<string, { revenue: number; invoiceCount: number }>();
+
+    for (const inv of invoices) {
+      const dt = new Date(inv.createdAt);
+      let period = '';
+      if (gran === 'day') {
+        period = dt.toISOString().slice(0, 10);
+      } else if (gran === 'week') {
+        period = getIsoWeekString(dt);
+      } else {
+        period = dt.toISOString().slice(0, 7);
+      }
+
+      let entry = periodMap.get(period);
+      if (!entry) {
+        entry = { revenue: 0, invoiceCount: 0 };
+        periodMap.set(period, entry);
+      }
+
+      entry.revenue += Number(inv.amount || 0);
+      entry.invoiceCount += 1;
+    }
+
+    return Array.from(periodMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([period, data]) => ({
+        period,
+        revenue: Number(data.revenue.toFixed(2)),
+        invoiceCount: data.invoiceCount
+      }));
+  }
+
+  // --- BI Reports: Module 2 (Top Customers) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/top-customers')
+  async getTopCustomers(
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('limit') limitStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    return this.calculateTopCustomers(db, from, to, limitStr);
+  }
+
+  private async calculateTopCustomers(
+    db: any,
+    from?: string,
+    to?: string,
+    limitStr?: string
+  ) {
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    let limit = limitStr ? parseInt(limitStr, 10) : 10;
+    if (isNaN(limit) || limit <= 0) limit = 10;
+
+    const allInvoices = await db.invoice.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      }
+    });
+    const invoices = allInvoices.filter(
+      (inv: any) => inv.status !== 'DRAFT' && inv.status !== 'CANCELLED'
+    );
+
+    const customers = await db.customer.findMany();
+    const custMap = new Map<string, { id: string; name: string; bin: string }>();
+    for (const c of customers) {
+      custMap.set(c.id, { id: c.id, name: c.name, bin: c.bin });
+    }
+
+    const aggMap = new Map<string, {
+      customerId: string;
+      customerName: string;
+      bin: string;
+      totalRevenue: number;
+      invoiceCount: number;
+    }>();
+
+    for (const inv of invoices) {
+      let entry = aggMap.get(inv.customerId);
+      if (!entry) {
+        const cInfo = custMap.get(inv.customerId);
+        entry = {
+          customerId: inv.customerId,
+          customerName: cInfo?.name || 'Unknown',
+          bin: cInfo?.bin || '',
+          totalRevenue: 0,
+          invoiceCount: 0
+        };
+        aggMap.set(inv.customerId, entry);
+      }
+
+      entry.totalRevenue += Number(inv.amount || 0);
+      entry.invoiceCount += 1;
+    }
+
+    return Array.from(aggMap.values())
+      .sort((a, b) => b.totalRevenue - a.totalRevenue)
+      .slice(0, limit)
+      .map((r) => ({
+        customerId: r.customerId,
+        customerName: r.customerName,
+        bin: r.bin,
+        totalRevenue: Number(r.totalRevenue.toFixed(2)),
+        invoiceCount: r.invoiceCount
+      }));
+  }
+
+  // --- BI Reports: Module 3 (Top Products) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/top-products')
+  async getTopProducts(
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('limit') limitStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    return this.calculateTopProducts(db, from, to, limitStr);
+  }
+
+  private async calculateTopProducts(
+    db: any,
+    from?: string,
+    to?: string,
+    limitStr?: string
+  ) {
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    let limit = limitStr ? parseInt(limitStr, 10) : 10;
+    if (isNaN(limit) || limit <= 0) limit = 10;
+
+    const allInvoices = await db.invoice.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+    const invoices = allInvoices.filter(
+      (inv: any) => inv.status !== 'DRAFT' && inv.status !== 'CANCELLED'
+    );
+
+    const productMap = new Map<string, {
+      sku: string;
+      name: string;
+      totalRevenue: number;
+      totalQuantity: number;
+    }>();
+
+    for (const inv of invoices) {
+      for (const item of inv.items) {
+        let entry = productMap.get(item.sku);
+        if (!entry) {
+          entry = {
+            sku: item.sku,
+            name: item.name,
+            totalRevenue: 0,
+            totalQuantity: 0
+          };
+          productMap.set(item.sku, entry);
+        } else if (item.name) {
+          entry.name = item.name;
+        }
+
+        entry.totalRevenue += Number(item.totalAmount || 0);
+        entry.totalQuantity += Number(item.quantity || 0);
+      }
+    }
+
+    return Array.from(productMap.values())
+      .sort((a, b) => b.totalRevenue - a.totalRevenue)
+      .slice(0, limit)
+      .map((r) => ({
+        sku: r.sku,
+        name: r.name,
+        totalRevenue: Number(r.totalRevenue.toFixed(2)),
+        totalQuantity: Number(r.totalQuantity.toFixed(3))
+      }));
+  }
+
+  // --- BI Reports: Module 4 (AR Aging) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/ar-aging')
+  async getArAging(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    return this.calculateArAging(db);
+  }
+
+  private async calculateArAging(db: any) {
+    const allInvoices = await db.invoice.findMany();
+    const invoices = allInvoices.filter(
+      (inv: any) => inv.status !== 'DRAFT' && inv.status !== 'CANCELLED'
+    );
+
+    const now = new Date();
+    const bucketsMap: Record<string, { totalOutstanding: number; invoiceCount: number }> = {
+      current: { totalOutstanding: 0, invoiceCount: 0 },
+      '1-30': { totalOutstanding: 0, invoiceCount: 0 },
+      '31-60': { totalOutstanding: 0, invoiceCount: 0 },
+      '61-90': { totalOutstanding: 0, invoiceCount: 0 },
+      '90+': { totalOutstanding: 0, invoiceCount: 0 }
+    };
+
+    let totalSum = 0;
+
+    for (const inv of invoices) {
+      const outstanding = Number(inv.amount || 0) - Number(inv.paidAmount || 0);
+      if (outstanding <= 0) continue;
+
+      totalSum += outstanding;
+      const dueDate = new Date(inv.dueDate);
+      const diffMs = now.getTime() - dueDate.getTime();
+      const daysOverdue = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      let key = 'current';
+      if (daysOverdue <= 0) {
+        key = 'current';
+      } else if (daysOverdue <= 30) {
+        key = '1-30';
+      } else if (daysOverdue <= 60) {
+        key = '31-60';
+      } else if (daysOverdue <= 90) {
+        key = '61-90';
+      } else {
+        key = '90+';
+      }
+
+      bucketsMap[key].totalOutstanding += outstanding;
+      bucketsMap[key].invoiceCount += 1;
+    }
+
+    const bucketKeys = ['current', '1-30', '31-60', '61-90', '90+'];
+    const buckets = bucketKeys.map((key) => ({
+      bucket: key,
+      totalOutstanding: Number(bucketsMap[key].totalOutstanding.toFixed(2)),
+      invoiceCount: bucketsMap[key].invoiceCount
+    }));
+
+    return {
+      buckets,
+      totalOutstanding: Number(totalSum.toFixed(2))
+    };
+  }
+
+  // --- BI Reports: Module 5 (AP Aging) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/ap-aging')
+  async getApAging(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    return this.calculateApAging(db);
+  }
+
+  private async calculateApAging(db: any) {
+    const allSupplierInvoices = await db.supplierInvoice.findMany();
+    const supplierInvoices = allSupplierInvoices.filter(
+      (inv: any) => inv.status !== 'CANCELLED' && inv.status !== 'PAID'
+    );
+
+    const now = new Date();
+    const bucketsMap: Record<string, { totalOutstanding: number; invoiceCount: number }> = {
+      current: { totalOutstanding: 0, invoiceCount: 0 },
+      '1-30': { totalOutstanding: 0, invoiceCount: 0 },
+      '31-60': { totalOutstanding: 0, invoiceCount: 0 },
+      '61-90': { totalOutstanding: 0, invoiceCount: 0 },
+      '90+': { totalOutstanding: 0, invoiceCount: 0 }
+    };
+
+    let noDueDateTotal = 0;
+    let noDueDateCount = 0;
+    let totalSum = 0;
+
+    for (const inv of supplierInvoices) {
+      const outstanding = Number(inv.amount || 0) - Number(inv.paidAmount || 0);
+      if (outstanding <= 0) continue;
+
+      totalSum += outstanding;
+
+      if (!inv.dueDate) {
+        noDueDateTotal += outstanding;
+        noDueDateCount += 1;
+        continue;
+      }
+
+      const dueDate = new Date(inv.dueDate);
+      const diffMs = now.getTime() - dueDate.getTime();
+      const daysOverdue = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      let key = 'current';
+      if (daysOverdue <= 0) {
+        key = 'current';
+      } else if (daysOverdue <= 30) {
+        key = '1-30';
+      } else if (daysOverdue <= 60) {
+        key = '31-60';
+      } else if (daysOverdue <= 90) {
+        key = '61-90';
+      } else {
+        key = '90+';
+      }
+
+      bucketsMap[key].totalOutstanding += outstanding;
+      bucketsMap[key].invoiceCount += 1;
+    }
+
+    const bucketKeys = ['current', '1-30', '31-60', '61-90', '90+'];
+    const buckets = bucketKeys.map((key) => ({
+      bucket: key,
+      totalOutstanding: Number(bucketsMap[key].totalOutstanding.toFixed(2)),
+      invoiceCount: bucketsMap[key].invoiceCount
+    }));
+
+    return {
+      buckets,
+      noDueDate: {
+        totalOutstanding: Number(noDueDateTotal.toFixed(2)),
+        invoiceCount: noDueDateCount
+      },
+      totalOutstanding: Number(totalSum.toFixed(2))
+    };
+  }
+
+  // --- BI Reports: Module 6 (Stock Health) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/stock-health')
+  async getStockHealth(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    return this.calculateStockHealth(db);
+  }
+
+  private async calculateStockHealth(db: any) {
+    const warehouses = await db.warehouse.findMany();
+    const stockItems = await db.stockItem.findMany();
+
+    const whStockMap = new Map<string, any[]>();
+    for (const item of stockItems) {
+      let list = whStockMap.get(item.warehouseId);
+      if (!list) {
+        list = [];
+        whStockMap.set(item.warehouseId, list);
+      }
+      list.push(item);
+    }
+
+    return warehouses.map((wh: any) => {
+      const items = whStockMap.get(wh.id) || [];
+      const uniqueSkus = new Set<string>();
+      let totalQuantity = 0;
+      let totalReserved = 0;
+      let lowStockCount = 0;
+
+      for (const item of items) {
+        uniqueSkus.add(item.sku);
+        const qty = Number(item.quantity || 0);
+        const res = Number(item.reserved || 0);
+        totalQuantity += qty;
+        totalReserved += res;
+        if (res >= qty) {
+          lowStockCount += 1;
+        }
+      }
+
+      return {
+        warehouseId: wh.id,
+        warehouseName: wh.name,
+        totalSkuCount: uniqueSkus.size,
+        totalQuantity: Number(totalQuantity.toFixed(3)),
+        totalReserved: Number(totalReserved.toFixed(3)),
+        lowStockCount
+      };
+    });
+  }
+
+  // --- BI Reports: Module 7 (Dashboard Summary) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/dashboard-summary')
+  async getDashboardSummary(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    const fromIso = startOfMonth.toISOString();
+    const toIso = endOfMonth.toISOString();
+
+    const revTrend = await this.calculateRevenueTrend(db, fromIso, toIso, 'month');
+    const revenueThisMonth = revTrend.reduce((acc: number, curr: any) => acc + curr.revenue, 0);
+
+    const arAging = await this.calculateArAging(db);
+    const arOutstandingTotal = arAging.totalOutstanding;
+
+    const apAging = await this.calculateApAging(db);
+    const apOutstandingTotal = apAging.totalOutstanding;
+
+    const stockHealth = await this.calculateStockHealth(db);
+    const lowStockItemCount = stockHealth.reduce((acc: number, curr: any) => acc + curr.lowStockCount, 0);
+
+    const discountReport = await this.getDiscountReport(fromIso, toIso, req);
+    const discountGivenThisMonth = discountReport.reduce((acc: number, curr: any) => acc + curr.totalDiscountAmount, 0);
+
+    const currencyReport = await this.getCurrencyExposureReport(undefined, undefined, req);
+    const currencyExposureCurrencies = currencyReport
+      .filter((c) => c.totalKztAmount > 0 || c.totalForeignCurrencyAmount > 0)
+      .map((c) => c.currency);
+
+    return {
+      revenueThisMonth: Number(revenueThisMonth.toFixed(2)),
+      arOutstandingTotal: Number(arOutstandingTotal.toFixed(2)),
+      apOutstandingTotal: Number(apOutstandingTotal.toFixed(2)),
+      lowStockItemCount,
+      discountGivenThisMonth: Number(discountGivenThisMonth.toFixed(2)),
+      currencyExposureCurrencies
+    };
+  }
+}
+
+function getIsoWeekString(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  const weekStr = weekNo < 10 ? `0${weekNo}` : `${weekNo}`;
+  return `${d.getUTCFullYear()}-W${weekStr}`;
 }
