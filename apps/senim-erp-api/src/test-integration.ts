@@ -38,6 +38,8 @@ async function runTest() {
   await publicClient.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
   
   // Clear schema if it exists to have a fresh test run
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockMovement" CASCADE;`);
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockItem" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."DocumentSignature" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."InvoiceLineItem" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."Invoice" CASCADE;`);
@@ -70,7 +72,9 @@ async function runTest() {
     `CREATE TABLE "${schemaName}"."ServiceAct" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ActLineItem" (id TEXT PRIMARY KEY, "actId" TEXT NOT NULL REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."DocumentSignature" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, "signedBy" TEXT NOT NULL, iin TEXT NOT NULL, "certSerial" TEXT NOT NULL, "signedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-    `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
+    `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
   ];
 
   const pgSetupClient = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } } });
@@ -271,6 +275,111 @@ async function runTest() {
     return deal.paymentStatus === 'paid' ? deal : null;
   });
   console.log('✓ CRM final payment status update verification verified.');
+
+  // 7. Test Warehouse Receipt
+  console.log('[Test] Posting warehouse receipt of 100 units for SKU HW-ROUTER-01...');
+  const receiptRes = await fetch('http://localhost:3004/api/warehouse/receipts', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({ sku: 'HW-ROUTER-01', quantity: 100, referenceId: 'REC-001' })
+  });
+
+  if (!receiptRes.ok) {
+    throw new Error(`Verification Failed: Warehouse receipt endpoint failed with status ${receiptRes.status}`);
+  }
+
+  const stockAfterReceipt = await (db as any).stockItem.findUnique({ where: { sku: 'HW-ROUTER-01' } });
+  if (!stockAfterReceipt || Number(stockAfterReceipt.quantity) !== 100) {
+    throw new Error(`Verification Failed: StockItem quantity is ${stockAfterReceipt?.quantity} instead of 100.`);
+  }
+  console.log('✓ Warehouse receipt recorded in ERP database.');
+
+  // Wait for stock.level_changed event to hit CRM
+  console.log('[Test] Waiting for CRM API to process stock.level_changed event after receipt...');
+  await pollUntil(async () => {
+    const res = await fetch('http://localhost:3002/api/stocks/HW-ROUTER-01');
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    return data.quantity === 100 ? data : null;
+  });
+  console.log('✓ CRM stock level verified at 100.');
+
+  // 8. Test Waybill Signing (Deduction of 2 units of HW-ROUTER-01)
+  console.log('[Test] Simulating signing Waybill (Delivery) & Stock Deduction...');
+  const waybillSignRes = await fetch(`http://localhost:3004/api/waybills/${waybill.id}/sign`, {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({ signedXml })
+  });
+
+  if (!waybillSignRes.ok) {
+    throw new Error(`Verification Failed: Sign waybill REST endpoint failed with status ${waybillSignRes.status}`);
+  }
+
+  const stockAfterWaybill = await (db as any).stockItem.findUnique({ where: { sku: 'HW-ROUTER-01' } });
+  if (!stockAfterWaybill || Number(stockAfterWaybill.quantity) !== 98) {
+    throw new Error(`Verification Failed: StockItem quantity is ${stockAfterWaybill?.quantity} instead of 98 after waybill signing.`);
+  }
+  console.log('✓ StockItem balance correctly deducted to 98 in ERP.');
+
+  const shipmentMovement = await (db as any).stockMovement.findFirst({
+    where: { sku: 'HW-ROUTER-01', type: 'shipment', referenceId: waybill.id }
+  });
+  if (!shipmentMovement || Number(shipmentMovement.quantity) !== -2) {
+    throw new Error('Verification Failed: StockMovement for shipment not recorded correctly.');
+  }
+  console.log('✓ StockMovement for shipment recorded in ERP.');
+
+  console.log('[Test] Waiting for CRM API to process stock.level_changed and shipment.completed events...');
+  await pollUntil(async () => {
+    const res = await fetch('http://localhost:3002/api/stocks/HW-ROUTER-01');
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    return data.quantity === 98 ? data : null;
+  });
+  console.log('✓ CRM stock level verified at 98.');
+
+  const crmDeal3 = await pollUntil(async () => {
+    const res = await fetch('http://localhost:3002/api/deals/deal_integration_999');
+    if (!res.ok) return null;
+    const deal = await res.json() as any;
+    return deal.shipmentStatus === 'delivered' ? deal : null;
+  });
+  console.log('✓ CRM waybill status update verification verified (fulfillment status: delivered).');
+
+  // 9. Test Edge Case: Signing a waybill with an unstocked item
+  console.log('[Test] Testing edge case: waybill for unstocked item...');
+  const unstockedWaybill = await (db as any).waybill.create({
+    data: {
+      number: 'WAY-UNSTOCKED-99',
+      customerId: waybill.customerId,
+      amount: 1000,
+      vatAmount: 120,
+      status: 'DRAFT',
+      crmDealId: 'deal_unstocked_99',
+      items: {
+        create: [
+          { sku: 'UNSTOCKED-SKU-999', name: 'Nonexistent Item', quantity: 5, price: 200, vatRate: 12, vatAmount: 24, totalAmount: 224 }
+        ]
+      }
+    }
+  });
+
+  const unstockedSignRes = await fetch(`http://localhost:3004/api/waybills/${unstockedWaybill.id}/sign`, {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({ signedXml })
+  });
+
+  if (!unstockedSignRes.ok) {
+    throw new Error(`Verification Failed: Sign unstocked waybill failed with status ${unstockedSignRes.status}`);
+  }
+
+  const unstockedItem = await (db as any).stockItem.findUnique({ where: { sku: 'UNSTOCKED-SKU-999' } });
+  if (!unstockedItem || Number(unstockedItem.quantity) !== -5) {
+    throw new Error(`Verification Failed: Unstocked item should have negative quantity -5, found ${unstockedItem?.quantity}`);
+  }
+  console.log('✓ Edge case verified: Unstocked item created with negative balance -5 and processed gracefully.');
 
   console.log('=== ALL INTEGRATION TESTS PASSED SUCCESSFULLY! ===');
   

@@ -161,3 +161,21 @@ model ProcessedEvent {
   eventType   String
   processedAt DateTime @default(now())
 }
+
+model StockItem {
+  id           String   @id @default(uuid())
+  sku          String   @unique
+  crmProductId String?
+  quantity     Decimal  @default(0) @db.Decimal(12, 3)
+  reserved     Decimal  @default(0) @db.Decimal(12, 3)
+  updatedAt    DateTime @updatedAt
+}
+
+model StockMovement {
+  id          String   @id @default(uuid())
+  sku         String
+  quantity    Decimal  @db.Decimal(12, 3)
+  type        String   // receipt | shipment
+  referenceId String?  // waybillId for shipment or receipt reference
+  createdAt   DateTime @default(now())
+}

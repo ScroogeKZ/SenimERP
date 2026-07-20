@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { EventBusPublisher, EventBusSubscriber, redisConnection } from '@senimerp/event-bus-client';
-import { IntegrationEvent, DealWonPayload, InvoicePaidPayload, ShipmentCompletedPayload } from '@senimerp/types';
+import { IntegrationEvent, DealWonPayload, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
 
 const app = express();
 app.use(cors());
@@ -20,6 +20,8 @@ const MOCK_DEALS = new Map<string, {
   shipmentStatus: string; 
   amount: number;
 }>();
+
+const MOCK_STOCKS = new Map<string, number>();
 
 // Initialize with a test deal so it always exists on startup for testing
 MOCK_DEALS.set('deal_test_101', {
@@ -75,6 +77,11 @@ app.get('/api/deals/:id', (req, res) => {
   res.json(deal);
 });
 
+app.get('/api/stocks/:sku', (req, res) => {
+  const quantity = MOCK_STOCKS.get(req.params.sku) ?? 0;
+  res.json({ sku: req.params.sku, quantity });
+});
+
 // Register Event Bus Subscriber for incoming updates from ERP
 new EventBusSubscriber(undefined, {
   'invoice.paid': async (event: IntegrationEvent<InvoicePaidPayload>) => {
@@ -94,6 +101,11 @@ new EventBusSubscriber(undefined, {
       MOCK_DEALS.set(dealId, deal);
       console.log(`[CRM API Subscriber] Event 'shipment.completed' processed. Deal ${dealId} shipment: ${deal.shipmentStatus}`);
     }
+  },
+  'stock.level_changed': async (event: IntegrationEvent<StockLevelChangedPayload>) => {
+    const { sku, quantity } = event.payload;
+    MOCK_STOCKS.set(sku, quantity);
+    console.log(`[CRM API Subscriber] Event 'stock.level_changed' processed. SKU ${sku} balance: ${quantity}`);
   }
 });
 

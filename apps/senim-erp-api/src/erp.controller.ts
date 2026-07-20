@@ -3,7 +3,7 @@ import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { TenantPrismaService } from './prisma.service.js';
 import { NCALayerService } from '@senimerp/integrations';
 import { EventBusPublisher } from '@senimerp/event-bus-client';
-import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload } from '@senimerp/types';
+import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
 import crypto from 'crypto';
 
 @Controller('api')
@@ -165,10 +165,13 @@ export class ErpController {
     const db = this.getDb(req);
     const certDetails = NCALayerService.verifySignature(signedXml);
 
-    const waybill = await db.waybill.findUnique({ where: { id } });
+    const waybill = await db.waybill.findUnique({
+      where: { id },
+      include: { items: true }
+    });
     if (!waybill) throw new NotFoundException('Waybill not found');
 
-    const updated = await db.$transaction(async (tx: any) => {
+    const { updated, stockChanges } = await db.$transaction(async (tx: any) => {
       await tx.documentSignature.create({
         data: {
           waybillId: id,
@@ -178,13 +181,54 @@ export class ErpController {
         }
       });
 
-      return tx.waybill.update({
+      const waybillUpdate = await tx.waybill.update({
         where: { id },
         data: {
           status: 'DELIVERED',
           signedXml
         }
       });
+
+      const stockChanges: Array<{ sku: string; quantity: number }> = [];
+
+      for (const item of waybill.items) {
+        const itemQty = Number(item.quantity);
+        const existingStock = await tx.stockItem.findUnique({ where: { sku: item.sku } });
+
+        let newQty = 0;
+        if (!existingStock) {
+          console.warn(`[ERP API] Waybill ${waybill.number} shipped SKU ${item.sku} without prior receipt. Creating StockItem with negative balance.`);
+          newQty = -itemQty;
+          await tx.stockItem.create({
+            data: {
+              sku: item.sku,
+              crmProductId: item.crmProductId || null,
+              quantity: newQty
+            }
+          });
+        } else {
+          const updatedStock = await tx.stockItem.update({
+            where: { sku: item.sku },
+            data: {
+              quantity: { decrement: itemQty }
+            }
+          });
+          newQty = Number(updatedStock.quantity);
+        }
+
+        await tx.stockMovement.create({
+          data: {
+            sku: item.sku,
+            quantity: -itemQty,
+            type: 'shipment',
+            referenceId: id
+          }
+        });
+
+        stockChanges.push({ sku: item.sku, quantity: newQty });
+      }
+
+      return { updated: waybillUpdate, stockChanges };
     });
 
     // Fire shipment completion event to CRM
@@ -201,11 +245,86 @@ export class ErpController {
         deliveredAt: new Date().toISOString()
       }
     };
-
     await this.publisher.publishEvent(shipmentEvent);
-    console.log(`[ERP API] Waybill ${waybill.number} signed. Fired shipment.completed event.`);
+
+    // Fire stock level changed events for all updated SKUs
+    for (const change of stockChanges) {
+      const stockEvent: IntegrationEvent<StockLevelChangedPayload> = {
+        eventId: crypto.randomUUID(),
+        eventType: 'stock.level_changed',
+        tenantId: req.user.tenantId,
+        timestamp: new Date().toISOString(),
+        payload: {
+          sku: change.sku,
+          quantity: change.quantity
+        }
+      };
+      await this.publisher.publishEvent(stockEvent);
+      console.log(`[ERP API] Fired stock.level_changed for SKU ${change.sku}: ${change.quantity}`);
+    }
+
+    console.log(`[ERP API] Waybill ${waybill.number} signed. Fired shipment.completed and stock.level_changed events.`);
 
     return updated;
+  }
+
+  // --- Warehouse ---
+
+  @Post('warehouse/receipts')
+  async createReceipt(
+    @Body('sku') sku: string,
+    @Body('quantity') quantity: number,
+    @Body('referenceId') referenceId: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (!sku || typeof sku !== 'string') throw new BadRequestException('sku is required');
+    if (!quantity || typeof quantity !== 'number' || quantity <= 0) {
+      throw new BadRequestException('Valid positive quantity is required');
+    }
+    const db = this.getDb(req);
+
+    const updatedStockItem = await db.$transaction(async (tx: any) => {
+      const stockItem = await tx.stockItem.upsert({
+        where: { sku },
+        update: {
+          quantity: { increment: quantity }
+        },
+        create: {
+          sku,
+          quantity
+        }
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          sku,
+          quantity,
+          type: 'receipt',
+          referenceId: referenceId || null
+        }
+      });
+
+      return stockItem;
+    });
+
+    const currentQty = Number(updatedStockItem.quantity);
+
+    // Publish stock level changed event
+    const event: IntegrationEvent<StockLevelChangedPayload> = {
+      eventId: crypto.randomUUID(),
+      eventType: 'stock.level_changed',
+      tenantId: req.user.tenantId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        sku,
+        quantity: currentQty
+      }
+    };
+
+    await this.publisher.publishEvent(event);
+    console.log(`[ERP API] Warehouse receipt processed for SKU ${sku}: +${quantity}. New balance: ${currentQty}.`);
+
+    return updatedStockItem;
   }
 
   // --- Service Acts ---
