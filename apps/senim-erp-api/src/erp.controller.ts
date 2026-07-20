@@ -478,7 +478,7 @@ export class ErpController {
           let anyReceived = false;
 
           for (const i of allItems) {
-            const rec = Number(i.id === targetItemId ? Number(i.receivedQty) + quantity : i.receivedQty);
+            const rec = Number(i.receivedQty);
             const ord = Number(i.quantity);
             if (rec < ord) allFullyReceived = false;
             if (rec > 0) anyReceived = true;
