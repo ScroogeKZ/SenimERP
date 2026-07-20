@@ -58,7 +58,7 @@ async function runSigningGuardsTest() {
     INSERT INTO "${schemaName}"."Customer" (id, name, bin) VALUES ('${customerId}', 'ТОО "Клиент Подпись"', '110102030405');
   `);
   await tenantClient.$executeRawUnsafe(`
-    INSERT INTO "${schemaName}"."StockItem" (id, sku, quantity) VALUES ('stock_sign_1', '${sku}', 50);
+    INSERT INTO "${schemaName}"."StockItem" (id, sku, "warehouseId", quantity) VALUES ('stock_sign_1', '${sku}', 'default-main-warehouse', 50);
   `);
   await tenantClient.$executeRawUnsafe(`
     INSERT INTO "${schemaName}"."Waybill" (id, number, "customerId", amount, "vatAmount", status)
@@ -108,7 +108,14 @@ async function runSigningGuardsTest() {
   console.log(`[Waybill Test SUCCESS] Rejected request message: ${JSON.stringify(wbFailedBody)}`);
 
   // Verify database StockItem quantity is strictly 40 (decremented by 10 once, NOT 20)
-  const stockItem = await tenantClient.stockItem.findUnique({ where: { sku } });
+  const stockItem = await tenantClient.stockItem.findUnique({
+    where: {
+      sku_warehouseId: {
+        sku,
+        warehouseId: 'default-main-warehouse'
+      }
+    }
+  });
   const finalStockQty = Number(stockItem?.quantity);
   console.log(`[Waybill Test SUCCESS] Stock quantity after concurrent signing: ${finalStockQty} (Expected: 40)`);
   if (finalStockQty !== 40) {

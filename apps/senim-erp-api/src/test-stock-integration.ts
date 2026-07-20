@@ -29,7 +29,7 @@ async function runStockTest() {
       sub: 'usr_test_accountant',
       tenantId,
       email: 'accountant@senim.kz',
-      roles: ['ERP_ACCOUNTANT']
+      roles: ['ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER']
     });
     return {
       'Content-Type': 'application/json',
@@ -39,6 +39,14 @@ async function runStockTest() {
 
   const baseUrl = `http://localhost:${port}`;
 
+  // Step 0: GET /api/warehouses to get provisioned default warehouse
+  console.log('[Test 0] Fetching default warehouse...');
+  const whRes = await fetch(`${baseUrl}/api/warehouses`, { headers: getAuthHeaders() });
+  if (!whRes.ok) throw new Error(`GET /api/warehouses failed: ${await whRes.text()}`);
+  const warehouses = await whRes.json();
+  const defaultWarehouseId = warehouses[0]?.id || 'default-main-warehouse';
+  console.log(`[Test 0 SUCCESS] Default warehouse ID: ${defaultWarehouseId}`);
+
   // Step 1: Execute POST /api/warehouse/receipts on brand-new tenant to verify auto DDL creation of StockItem and StockMovement
   console.log('[Test 1] Executing POST /api/warehouse/receipts on brand-new tenant...');
   const receipt1Res = await fetch(`${baseUrl}/api/warehouse/receipts`, {
@@ -47,6 +55,7 @@ async function runStockTest() {
     body: JSON.stringify({
       sku: 'SKU-LAPTOP-01',
       quantity: 10,
+      warehouseId: defaultWarehouseId,
       referenceId: 'REC-001'
     })
   });
@@ -74,6 +83,7 @@ async function runStockTest() {
     body: JSON.stringify({
       sku: 'SKU-MOUSE-02',
       quantity: 5,
+      warehouseId: defaultWarehouseId,
       referenceId: 'REC-002'
     })
   });

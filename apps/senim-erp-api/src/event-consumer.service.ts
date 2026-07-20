@@ -206,10 +206,14 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           SELECT nextval('waybill_number_seq') as nextval;
         `;
         const waybillNumber = `WAY-${year}-${wbSeq.toString().padStart(4, '0')}`;
+        const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
+        const defaultWarehouseId = defaultWarehouse?.id || 'default-main-warehouse';
+
         await tx.waybill.create({
           data: {
             number: waybillNumber,
             customerId: customer.id,
+            warehouseId: defaultWarehouseId,
             amount: waybillTotal,
             vatAmount: waybillVat,
             status: 'DRAFT',
@@ -219,7 +223,7 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             }
           }
         });
-        console.log(`[EventConsumer] Draft Waybill created: ${waybillNumber} for goods.`);
+        console.log(`[EventConsumer] Draft Waybill created: ${waybillNumber} for goods on warehouse ${defaultWarehouseId}.`);
       }
 
       // 4. Create Service Act if there are services

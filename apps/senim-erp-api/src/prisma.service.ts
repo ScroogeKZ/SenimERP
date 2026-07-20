@@ -111,6 +111,22 @@ export class TenantPrismaService implements OnModuleDestroy {
 
             // 3. Create tables inside the tenant schema
             await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."Warehouse" (
+                "id" TEXT PRIMARY KEY,
+                "name" TEXT NOT NULL,
+                "code" TEXT UNIQUE NOT NULL,
+                "isDefault" BOOLEAN NOT NULL DEFAULT false,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "${schema}"."Warehouse" ("id", "name", "code", "isDefault")
+              VALUES ('default-main-warehouse', 'Основной склад', 'MAIN', true)
+              ON CONFLICT ("code") DO NOTHING;
+            `);
+
+            await tx.$executeRawUnsafe(`
               CREATE TABLE IF NOT EXISTS "${schema}"."Customer" (
                 "id" TEXT PRIMARY KEY,
                 "crmId" TEXT UNIQUE,
@@ -174,6 +190,7 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "id" TEXT PRIMARY KEY,
                 "number" TEXT UNIQUE NOT NULL,
                 "customerId" TEXT NOT NULL REFERENCES "${schema}"."Customer"("id") ON DELETE CASCADE,
+                "warehouseId" TEXT REFERENCES "${schema}"."Warehouse"("id") ON DELETE SET NULL,
                 "amount" DECIMAL(15, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "status" TEXT NOT NULL DEFAULT 'DRAFT',
@@ -282,6 +299,7 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "id" TEXT PRIMARY KEY,
                 "number" TEXT UNIQUE NOT NULL,
                 "supplierId" TEXT NOT NULL REFERENCES "${schema}"."Supplier"("id") ON DELETE CASCADE,
+                "warehouseId" TEXT REFERENCES "${schema}"."Warehouse"("id") ON DELETE SET NULL,
                 "status" TEXT NOT NULL DEFAULT 'DRAFT',
                 "expectedDate" TIMESTAMP,
                 "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -333,11 +351,13 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`
               CREATE TABLE IF NOT EXISTS "${schema}"."StockItem" (
                 "id" TEXT PRIMARY KEY,
-                "sku" TEXT UNIQUE NOT NULL,
+                "sku" TEXT NOT NULL,
+                "warehouseId" TEXT NOT NULL REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE,
                 "crmProductId" TEXT,
                 "quantity" DECIMAL(12, 3) NOT NULL DEFAULT 0,
                 "reserved" DECIMAL(12, 3) NOT NULL DEFAULT 0,
-                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT "StockItem_sku_warehouseId_key" UNIQUE ("sku", "warehouseId")
               );
             `);
 
@@ -345,6 +365,7 @@ export class TenantPrismaService implements OnModuleDestroy {
               CREATE TABLE IF NOT EXISTS "${schema}"."StockMovement" (
                 "id" TEXT PRIMARY KEY,
                 "sku" TEXT NOT NULL,
+                "warehouseId" TEXT NOT NULL REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE,
                 "quantity" DECIMAL(12, 3) NOT NULL,
                 "type" TEXT NOT NULL,
                 "referenceId" TEXT,
@@ -370,6 +391,79 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."act_number_seq";`);
             await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."po_number_seq";`);
             await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."supplier_invoice_number_seq";`);
+
+            // 5. Run migrations for legacy tenant schemas
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" ADD COLUMN IF NOT EXISTS "warehouseId" TEXT;
+            `);
+            await tx.$executeRawUnsafe(`
+              UPDATE "${schema}"."StockItem"
+              SET "warehouseId" = (SELECT "id" FROM "${schema}"."Warehouse" WHERE "isDefault" = true LIMIT 1)
+              WHERE "warehouseId" IS NULL;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" ALTER COLUMN "warehouseId" SET NOT NULL;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" DROP CONSTRAINT IF EXISTS "StockItem_sku_key";
+            `);
+            await tx.$executeRawUnsafe(`
+              DROP INDEX IF EXISTS "${schema}"."StockItem_sku_key";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" DROP CONSTRAINT IF EXISTS "StockItem_sku_warehouseId_key";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" ADD CONSTRAINT "StockItem_sku_warehouseId_key" UNIQUE ("sku", "warehouseId");
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" DROP CONSTRAINT IF EXISTS "StockItem_warehouseId_fkey";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockItem" ADD CONSTRAINT "StockItem_warehouseId_fkey"
+                FOREIGN KEY ("warehouseId") REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE;
+            `);
+
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockMovement" ADD COLUMN IF NOT EXISTS "warehouseId" TEXT;
+            `);
+            await tx.$executeRawUnsafe(`
+              UPDATE "${schema}"."StockMovement"
+              SET "warehouseId" = (SELECT "id" FROM "${schema}"."Warehouse" WHERE "isDefault" = true LIMIT 1)
+              WHERE "warehouseId" IS NULL;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockMovement" ALTER COLUMN "warehouseId" SET NOT NULL;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockMovement" DROP CONSTRAINT IF EXISTS "StockMovement_warehouseId_fkey";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."StockMovement" ADD CONSTRAINT "StockMovement_warehouseId_fkey"
+                FOREIGN KEY ("warehouseId") REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE;
+            `);
+
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."Waybill" ADD COLUMN IF NOT EXISTS "warehouseId" TEXT;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."Waybill" DROP CONSTRAINT IF EXISTS "Waybill_warehouseId_fkey";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."Waybill" ADD CONSTRAINT "Waybill_warehouseId_fkey"
+                FOREIGN KEY ("warehouseId") REFERENCES "${schema}"."Warehouse"("id") ON DELETE SET NULL;
+            `);
+
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."PurchaseOrder" ADD COLUMN IF NOT EXISTS "warehouseId" TEXT;
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."PurchaseOrder" DROP CONSTRAINT IF EXISTS "PurchaseOrder_warehouseId_fkey";
+            `);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_warehouseId_fkey"
+                FOREIGN KEY ("warehouseId") REFERENCES "${schema}"."Warehouse"("id") ON DELETE SET NULL;
+            `);
           },
           {
             timeout: 30000, // Explicit 30s timeout to allow lock waiting without transaction abortion

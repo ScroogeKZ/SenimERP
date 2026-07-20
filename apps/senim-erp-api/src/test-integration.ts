@@ -45,6 +45,7 @@ async function runTest() {
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."EsfDocument" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockMovement" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockItem" CASCADE;`);
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."Warehouse" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."DocumentSignature" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."InvoiceLineItem" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."Invoice" CASCADE;`);
@@ -78,23 +79,25 @@ async function runTest() {
          CREATE TYPE "${schemaName}"."SupplierInvoiceStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID', 'CANCELLED');
        END IF;
      END$$;`,
+    `CREATE TABLE "${schemaName}"."Warehouse" (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT UNIQUE NOT NULL, "isDefault" BOOLEAN DEFAULT false NOT NULL, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `INSERT INTO "${schemaName}"."Warehouse" (id, name, code, "isDefault") VALUES ('default-main-warehouse', 'Основной склад', 'MAIN', true);`,
     `CREATE TABLE "${schemaName}"."Customer" (id TEXT PRIMARY KEY, "crmId" TEXT UNIQUE, name TEXT NOT NULL, bin TEXT UNIQUE NOT NULL, address TEXT, email TEXT, phone TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."Invoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP NOT NULL, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."InvoiceLineItem" (id TEXT PRIMARY KEY, "invoiceId" TEXT NOT NULL REFERENCES "${schemaName}"."Invoice"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
-    `CREATE TABLE "${schemaName}"."Waybill" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."Waybill" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, "warehouseId" TEXT REFERENCES "${schemaName}"."Warehouse"(id) ON DELETE SET NULL, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."WaybillLineItem" (id TEXT PRIMARY KEY, "waybillId" TEXT NOT NULL REFERENCES "${schemaName}"."Waybill"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."ServiceAct" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ActLineItem" (id TEXT PRIMARY KEY, "actId" TEXT NOT NULL REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."DocumentSignature" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, "signedBy" TEXT NOT NULL, iin TEXT NOT NULL, "certSerial" TEXT NOT NULL, "signedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."EsfDocument" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, status TEXT DEFAULT 'PENDING', "esfRegNumber" TEXT, "requestXml" TEXT, "responseXml" TEXT, "errorMessage" TEXT, "submittedAt" TIMESTAMP, "confirmedAt" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."Supplier" (id TEXT PRIMARY KEY, name TEXT NOT NULL, bin TEXT UNIQUE, address TEXT, email TEXT, phone TEXT, "bankAccount" TEXT, "bankBik" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-    `CREATE TABLE "${schemaName}"."PurchaseOrder" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, status TEXT DEFAULT 'DRAFT', "expectedDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."PurchaseOrder" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, "warehouseId" TEXT REFERENCES "${schemaName}"."Warehouse"(id) ON DELETE SET NULL, status TEXT DEFAULT 'DRAFT', "expectedDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."PurchaseOrderItem" (id TEXT PRIMARY KEY, "purchaseOrderId" TEXT NOT NULL REFERENCES "${schemaName}"."PurchaseOrder"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, "receivedQty" DECIMAL(12,3) DEFAULT 0 NOT NULL, price DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."SupplierInvoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, "purchaseOrderId" TEXT REFERENCES "${schemaName}"."PurchaseOrder"(id) ON DELETE SET NULL, amount DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'UNPAID', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."SupplierPayment" (id TEXT PRIMARY KEY, "supplierInvoiceId" TEXT NOT NULL REFERENCES "${schemaName}"."SupplierInvoice"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "paidAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, method TEXT, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-    `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-    `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
+    `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, "warehouseId" TEXT NOT NULL REFERENCES "${schemaName}"."Warehouse"(id) ON DELETE CASCADE, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "StockItem_sku_warehouseId_key" UNIQUE (sku, "warehouseId"));`,
+    `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, "warehouseId" TEXT NOT NULL REFERENCES "${schemaName}"."Warehouse"(id) ON DELETE CASCADE, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
   ];
 
   const pgSetupClient = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } } });
@@ -301,14 +304,16 @@ async function runTest() {
   const receiptRes = await fetch('http://localhost:3004/api/warehouse/receipts', {
     method: 'POST',
     headers: apiHeaders,
-    body: JSON.stringify({ sku: 'HW-ROUTER-01', quantity: 100, referenceId: 'REC-001' })
+    body: JSON.stringify({ sku: 'HW-ROUTER-01', quantity: 100, warehouseId: 'default-main-warehouse', referenceId: 'REC-001' })
   });
 
   if (!receiptRes.ok) {
     throw new Error(`Verification Failed: Warehouse receipt endpoint failed with status ${receiptRes.status}`);
   }
 
-  const stockAfterReceipt = await (db as any).stockItem.findUnique({ where: { sku: 'HW-ROUTER-01' } });
+  const stockAfterReceipt = await (db as any).stockItem.findUnique({
+    where: { sku_warehouseId: { sku: 'HW-ROUTER-01', warehouseId: 'default-main-warehouse' } }
+  });
   if (!stockAfterReceipt || Number(stockAfterReceipt.quantity) !== 100) {
     throw new Error(`Verification Failed: StockItem quantity is ${stockAfterReceipt?.quantity} instead of 100.`);
   }
@@ -336,7 +341,9 @@ async function runTest() {
     throw new Error(`Verification Failed: Sign waybill REST endpoint failed with status ${waybillSignRes.status}`);
   }
 
-  const stockAfterWaybill = await (db as any).stockItem.findUnique({ where: { sku: 'HW-ROUTER-01' } });
+  const stockAfterWaybill = await (db as any).stockItem.findUnique({
+    where: { sku_warehouseId: { sku: 'HW-ROUTER-01', warehouseId: 'default-main-warehouse' } }
+  });
   if (!stockAfterWaybill || Number(stockAfterWaybill.quantity) !== 98) {
     throw new Error(`Verification Failed: StockItem quantity is ${stockAfterWaybill?.quantity} instead of 98 after waybill signing.`);
   }
@@ -420,7 +427,9 @@ async function runTest() {
     throw new Error(`Verification Failed: Sign unstocked waybill failed with status ${unstockedSignRes.status}`);
   }
 
-  const unstockedItem = await (db as any).stockItem.findUnique({ where: { sku: 'UNSTOCKED-SKU-999' } });
+  const unstockedItem = await (db as any).stockItem.findUnique({
+    where: { sku_warehouseId: { sku: 'UNSTOCKED-SKU-999', warehouseId: 'default-main-warehouse' } }
+  });
   if (!unstockedItem || Number(unstockedItem.quantity) !== -5) {
     throw new Error(`Verification Failed: Unstocked item should have negative quantity -5, found ${unstockedItem?.quantity}`);
   }

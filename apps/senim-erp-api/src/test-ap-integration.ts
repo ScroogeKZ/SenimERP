@@ -61,7 +61,7 @@ async function runApTest() {
     sub: 'usr_accountant_test',
     tenantId,
     email: 'accountant@senim.kz',
-    roles: ['ERP_ACCOUNTANT']
+    roles: ['ERP_ACCOUNTANT', 'ERP_PURCHASER']
   });
 
   const headers = {

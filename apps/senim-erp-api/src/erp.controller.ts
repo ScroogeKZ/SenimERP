@@ -279,10 +279,19 @@ export class ErpController {
       });
 
       const stockChanges: Array<{ sku: string; quantity: number }> = [];
+      const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
+      const targetWarehouseId = waybill.warehouseId || defaultWarehouse?.id || 'default-main-warehouse';
 
       for (const item of waybill.items) {
         const itemQty = Number(item.quantity);
-        const existingStock = await tx.stockItem.findUnique({ where: { sku: item.sku } });
+        const existingStock = await tx.stockItem.findUnique({
+          where: {
+            sku_warehouseId: {
+              sku: item.sku,
+              warehouseId: targetWarehouseId
+            }
+          }
+        });
 
         let newQty = 0;
         if (!existingStock) {
@@ -291,13 +300,19 @@ export class ErpController {
           await tx.stockItem.create({
             data: {
               sku: item.sku,
+              warehouseId: targetWarehouseId,
               crmProductId: item.crmProductId || null,
               quantity: newQty
             }
           });
         } else {
           const updatedStock = await tx.stockItem.update({
-            where: { sku: item.sku },
+            where: {
+              sku_warehouseId: {
+                sku: item.sku,
+                warehouseId: targetWarehouseId
+              }
+            },
             data: {
               quantity: { decrement: itemQty }
             }
@@ -308,6 +323,7 @@ export class ErpController {
         await tx.stockMovement.create({
           data: {
             sku: item.sku,
+            warehouseId: targetWarehouseId,
             quantity: -itemQty,
             type: 'shipment',
             referenceId: id
@@ -413,6 +429,7 @@ export class ErpController {
   @Post('purchase-orders')
   async createPurchaseOrder(
     @Body('supplierId') supplierId: string,
+    @Body('warehouseId') warehouseId: string | undefined,
     @Body('expectedDate') expectedDateStr: string | undefined,
     @Body('items') itemsData: Array<{ sku: string; crmProductId?: string; name: string; quantity: number; price: number }>,
     @Req() req: RequestWithUser
@@ -422,6 +439,13 @@ export class ErpController {
       throw new BadRequestException('At least one item is required in purchase order');
     }
     const db = await this.getDb(req);
+
+    let targetWarehouseId = warehouseId;
+    if (!targetWarehouseId) {
+      const defaultWh = await db.warehouse.findFirst({ where: { isDefault: true } });
+      targetWarehouseId = defaultWh?.id;
+    }
+
     const year = new Date().getFullYear();
     const [{ nextval: poSeq }] = await db.$queryRaw<Array<{ nextval: bigint }>>`
       SELECT nextval('po_number_seq') as nextval;
@@ -434,6 +458,7 @@ export class ErpController {
         data: {
           number: poNumber,
           supplierId,
+          warehouseId: targetWarehouseId || null,
           expectedDate,
           status: 'DRAFT',
           items: {
@@ -497,10 +522,57 @@ export class ErpController {
   // --- Warehouse ---
 
   @Roles('ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Post('warehouses')
+  async createWarehouse(
+    @Body('name') name: string,
+    @Body('code') code: string,
+    @Body('isDefault') isDefault: boolean | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (!name || typeof name !== 'string') throw new BadRequestException('name is required');
+    if (!code || typeof code !== 'string') throw new BadRequestException('code is required');
+    const db = await this.getDb(req);
+
+    if (isDefault) {
+      return db.$transaction(async (tx: any) => {
+        await tx.warehouse.updateMany({
+          where: { isDefault: true },
+          data: { isDefault: false }
+        });
+        return tx.warehouse.create({
+          data: {
+            name,
+            code,
+            isDefault: true
+          }
+        });
+      });
+    }
+
+    return db.warehouse.create({
+      data: {
+        name,
+        code,
+        isDefault: false
+      }
+    });
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('warehouses')
+  async getWarehouses(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    return db.warehouse.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  @Roles('ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('warehouse/receipts')
   async createReceipt(
     @Body('sku') sku: string,
     @Body('quantity') quantity: number,
+    @Body('warehouseId') warehouseId: string,
     @Body('referenceId') referenceId: string | undefined,
     @Body('purchaseOrderId') purchaseOrderId: string | undefined,
     @Body('purchaseOrderItemId') purchaseOrderItemId: string | undefined,
@@ -510,17 +582,26 @@ export class ErpController {
     if (!quantity || typeof quantity !== 'number' || quantity <= 0) {
       throw new BadRequestException('Valid positive quantity is required');
     }
+    if (!warehouseId || typeof warehouseId !== 'string') {
+      throw new BadRequestException('warehouseId is required');
+    }
     const db = await this.getDb(req);
 
     const updatedStockItem = await db.$transaction(async (tx: any) => {
       // 1. Upsert StockItem
       const stockItem = await tx.stockItem.upsert({
-        where: { sku },
+        where: {
+          sku_warehouseId: {
+            sku,
+            warehouseId
+          }
+        },
         update: {
           quantity: { increment: quantity }
         },
         create: {
           sku,
+          warehouseId,
           quantity
         }
       });
@@ -530,6 +611,7 @@ export class ErpController {
       await tx.stockMovement.create({
         data: {
           sku,
+          warehouseId,
           quantity,
           type: 'receipt',
           referenceId: finalReferenceId
@@ -622,6 +704,7 @@ export class ErpController {
   @Get('stock')
   async getStock(
     @Query('sku') sku: string | undefined,
+    @Query('warehouseId') warehouseId: string | undefined,
     @Query('lowStock') lowStockStr: string | undefined,
     @Req() req: RequestWithUser
   ) {
@@ -630,6 +713,9 @@ export class ErpController {
     const where: any = {};
     if (sku && typeof sku === 'string') {
       where.sku = sku;
+    }
+    if (warehouseId && typeof warehouseId === 'string') {
+      where.warehouseId = warehouseId;
     }
 
     const items = await db.stockItem.findMany({
@@ -650,6 +736,7 @@ export class ErpController {
   @Get('stock/movements')
   async getStockMovements(
     @Query('sku') sku: string | undefined,
+    @Query('warehouseId') warehouseId: string | undefined,
     @Query('type') type: string | undefined,
     @Query('referenceId') referenceId: string | undefined,
     @Query('limit') limitStr: string | undefined,
@@ -664,6 +751,9 @@ export class ErpController {
     const where: any = {};
     if (sku && typeof sku === 'string') {
       where.sku = sku;
+    }
+    if (warehouseId && typeof warehouseId === 'string') {
+      where.warehouseId = warehouseId;
     }
     if (type) {
       where.type = type;

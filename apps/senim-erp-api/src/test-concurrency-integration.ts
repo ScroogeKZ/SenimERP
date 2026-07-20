@@ -29,7 +29,7 @@ async function runConcurrencyTest() {
       sub: 'usr_test_accountant',
       tenantId,
       email: 'accountant@senim.kz',
-      roles: ['ERP_ACCOUNTANT']
+      roles: ['ERP_ACCOUNTANT', 'ERP_PURCHASER']
     });
     return {
       'Content-Type': 'application/json',
