@@ -173,6 +173,10 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "originalPrice" DECIMAL(15, 2),
                 "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
                 "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+                "dealCurrency" TEXT,
+                "dealCurrencyPrice" DECIMAL(15, 4),
+                "exchangeRate" DECIMAL(12, 6),
+                "exchangeRateDate" TIMESTAMP,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -220,6 +224,10 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "originalPrice" DECIMAL(15, 2),
                 "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
                 "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+                "dealCurrency" TEXT,
+                "dealCurrencyPrice" DECIMAL(15, 4),
+                "exchangeRate" DECIMAL(12, 6),
+                "exchangeRateDate" TIMESTAMP,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -254,6 +262,10 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "originalPrice" DECIMAL(15, 2),
                 "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
                 "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+                "dealCurrency" TEXT,
+                "dealCurrencyPrice" DECIMAL(15, 4),
+                "exchangeRate" DECIMAL(12, 6),
+                "exchangeRateDate" TIMESTAMP,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -515,6 +527,21 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "dealCurrency" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "dealCurrencyPrice" DECIMAL(15, 4);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "exchangeRate" DECIMAL(12, 6);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "exchangeRateDate" TIMESTAMP;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "dealCurrency" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "dealCurrencyPrice" DECIMAL(15, 4);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "exchangeRate" DECIMAL(12, 6);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "exchangeRateDate" TIMESTAMP;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "dealCurrency" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "dealCurrencyPrice" DECIMAL(15, 4);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "exchangeRate" DECIMAL(12, 6);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "exchangeRateDate" TIMESTAMP;`);
           },
           {
             timeout: 30000, // Explicit 30s timeout to allow lock waiting without transaction abortion

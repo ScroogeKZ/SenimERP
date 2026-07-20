@@ -161,6 +161,10 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           originalPrice: discountInfo.originalPrice,
           discountAmount: discountInfo.discountAmount,
           discountPercent: discountInfo.discountPercent,
+          dealCurrency: item.dealCurrency ?? null,
+          dealCurrencyPrice: item.dealCurrencyPrice ?? null,
+          exchangeRate: item.exchangeRate ?? null,
+          exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
           vatRate,
           vatAmount: lineVat,
           totalAmount: lineTotalIncludingVat
@@ -218,6 +222,10 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             originalPrice: discountInfo.originalPrice,
             discountAmount: discountInfo.discountAmount,
             discountPercent: discountInfo.discountPercent,
+            dealCurrency: item.dealCurrency ?? null,
+            dealCurrencyPrice: item.dealCurrencyPrice ?? null,
+            exchangeRate: item.exchangeRate ?? null,
+            exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
             vatRate,
             vatAmount: vat,
             totalAmount: totalWithVat
@@ -294,6 +302,10 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             originalPrice: discountInfo.originalPrice,
             discountAmount: discountInfo.discountAmount,
             discountPercent: discountInfo.discountPercent,
+            dealCurrency: item.dealCurrency ?? null,
+            dealCurrencyPrice: item.dealCurrencyPrice ?? null,
+            exchangeRate: item.exchangeRate ?? null,
+            exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
             vatRate,
             vatAmount: vat,
             totalAmount: totalWithVat

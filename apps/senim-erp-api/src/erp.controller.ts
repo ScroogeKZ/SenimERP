@@ -1617,4 +1617,91 @@ export class ErpController {
       totalDiscountAmount: Number(r.totalDiscountAmount.toFixed(2))
     }));
   }
+
+  // --- Reports (Currency Exposure) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/currency-exposure')
+  async getCurrencyExposureReport(
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+
+    const invoices = await db.invoice.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const waybills = await db.waybill.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const acts = await db.serviceAct.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const currencyMap = new Map<string, {
+      currency: string;
+      totalKztAmount: number;
+      totalForeignCurrencyAmount: number;
+      lineItemCount: number;
+    }>();
+
+    const processItems = (items: Array<any>) => {
+      for (const item of items) {
+        if (!item.dealCurrency) continue;
+        let entry = currencyMap.get(item.dealCurrency);
+        if (!entry) {
+          entry = {
+            currency: item.dealCurrency,
+            totalKztAmount: 0,
+            totalForeignCurrencyAmount: 0,
+            lineItemCount: 0
+          };
+          currencyMap.set(item.dealCurrency, entry);
+        }
+
+        const kztAmt = Number(item.totalAmount || 0);
+        const foreignPrice = Number(item.dealCurrencyPrice || 0);
+        const qty = Number(item.quantity || 0);
+
+        entry.totalKztAmount += kztAmt;
+        entry.totalForeignCurrencyAmount += foreignPrice * qty;
+        entry.lineItemCount += 1;
+      }
+    };
+
+    for (const inv of invoices) processItems(inv.items);
+    for (const wb of waybills) processItems(wb.items);
+    for (const act of acts) processItems(act.items);
+
+    return Array.from(currencyMap.values()).map((r) => ({
+      currency: r.currency,
+      totalKztAmount: Number(r.totalKztAmount.toFixed(2)),
+      totalForeignCurrencyAmount: Number(r.totalForeignCurrencyAmount.toFixed(4)),
+      lineItemCount: r.lineItemCount
+    }));
+  }
 }
