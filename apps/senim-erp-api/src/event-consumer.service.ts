@@ -151,7 +151,11 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
       });
 
       // 2. Create payment Invoice
-      const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+      const year = new Date().getFullYear();
+      const [{ nextval: invSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+        SELECT nextval('invoice_number_seq') as nextval;
+      `;
+      const invoiceNumber = `INV-${year}-${invSeq.toString().padStart(4, '0')}`;
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 14); // 14 days payment term
 
@@ -198,7 +202,10 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           };
         });
 
-        const waybillNumber = `WAY-${Date.now().toString().slice(-6)}`;
+        const [{ nextval: wbSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+          SELECT nextval('waybill_number_seq') as nextval;
+        `;
+        const waybillNumber = `WAY-${year}-${wbSeq.toString().padStart(4, '0')}`;
         await tx.waybill.create({
           data: {
             number: waybillNumber,
@@ -241,7 +248,10 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           };
         });
 
-        const actNumber = `ACT-${Date.now().toString().slice(-6)}`;
+        const [{ nextval: actSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+          SELECT nextval('act_number_seq') as nextval;
+        `;
+        const actNumber = `ACT-${year}-${actSeq.toString().padStart(4, '0')}`;
         await tx.serviceAct.create({
           data: {
             number: actNumber,

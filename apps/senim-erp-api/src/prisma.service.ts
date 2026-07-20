@@ -363,6 +363,13 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "processedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
               );
             `);
+
+            // 4. Create sequences for monotonic document numbering
+            await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."invoice_number_seq";`);
+            await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."waybill_number_seq";`);
+            await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."act_number_seq";`);
+            await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."po_number_seq";`);
+            await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."supplier_invoice_number_seq";`);
           },
           {
             timeout: 30000, // Explicit 30s timeout to allow lock waiting without transaction abortion

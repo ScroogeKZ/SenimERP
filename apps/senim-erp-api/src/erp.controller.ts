@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { TenantPrismaService } from './prisma.service.js';
 import { EsfQueueService } from './esf-queue.service.js';
@@ -410,28 +410,39 @@ export class ErpController {
       throw new BadRequestException('At least one item is required in purchase order');
     }
     const db = await this.getDb(req);
-    const poNumber = `PO-${Date.now().toString().slice(-6)}`;
+    const year = new Date().getFullYear();
+    const [{ nextval: poSeq }] = await db.$queryRaw<Array<{ nextval: bigint }>>`
+      SELECT nextval('po_number_seq') as nextval;
+    `;
+    const poNumber = `PO-${year}-${poSeq.toString().padStart(4, '0')}`;
     const expectedDate = expectedDateStr ? new Date(expectedDateStr) : null;
 
-    return db.purchaseOrder.create({
-      data: {
-        number: poNumber,
-        supplierId,
-        expectedDate,
-        status: 'DRAFT',
-        items: {
-          create: itemsData.map((item) => ({
-            sku: item.sku,
-            crmProductId: item.crmProductId || null,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price,
-            receivedQty: 0
-          }))
-        }
-      },
-      include: { supplier: true, items: true }
-    });
+    try {
+      return await db.purchaseOrder.create({
+        data: {
+          number: poNumber,
+          supplierId,
+          expectedDate,
+          status: 'DRAFT',
+          items: {
+            create: itemsData.map((item) => ({
+              sku: item.sku,
+              crmProductId: item.crmProductId || null,
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price,
+              receivedQty: 0
+            }))
+          }
+        },
+        include: { supplier: true, items: true }
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        throw new ConflictException('Purchase order number collision, please retry');
+      }
+      throw e;
+    }
   }
 
   @Get('purchase-orders')
@@ -823,25 +834,36 @@ export class ErpController {
       }
     }
 
-    const invoiceNumber = `SUP-INV-${Date.now().toString().slice(-6)}`;
+    const year = new Date().getFullYear();
+    const [{ nextval: supInvSeq }] = await db.$queryRaw<Array<{ nextval: bigint }>>`
+      SELECT nextval('supplier_invoice_number_seq') as nextval;
+    `;
+    const invoiceNumber = `SUP-INV-${year}-${supInvSeq.toString().padStart(4, '0')}`;
     const dueDate = dueDateStr ? new Date(dueDateStr) : null;
 
-    return db.supplierInvoice.create({
-      data: {
-        number: invoiceNumber,
-        supplierId,
-        purchaseOrderId: purchaseOrderId || null,
-        amount,
-        paidAmount: 0.00,
-        status: 'UNPAID',
-        dueDate
-      },
-      include: {
-        supplier: true,
-        purchaseOrder: true,
-        payments: true
+    try {
+      return await db.supplierInvoice.create({
+        data: {
+          number: invoiceNumber,
+          supplierId,
+          purchaseOrderId: purchaseOrderId || null,
+          amount,
+          paidAmount: 0.00,
+          status: 'UNPAID',
+          dueDate
+        },
+        include: {
+          supplier: true,
+          purchaseOrder: true,
+          payments: true
+        }
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        throw new ConflictException('Supplier invoice number collision, please retry');
       }
-    });
+      throw e;
+    }
   }
 
   @Get('supplier-invoices')
