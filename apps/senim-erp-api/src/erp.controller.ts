@@ -422,6 +422,177 @@ export class ErpController {
     });
   }
 
+  // --- RMA (Returns) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Post('rma')
+  async createRma(
+    @Body('waybillId') waybillId: string,
+    @Body('reason') reason: string | undefined,
+    @Body('items') items: Array<{ sku: string; quantity: number }>,
+    @Req() req: RequestWithUser
+  ) {
+    if (!waybillId || typeof waybillId !== 'string') {
+      throw new BadRequestException('waybillId is required');
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestException('At least one return item is required');
+    }
+
+    const db = await this.getDb(req);
+    const waybill = await db.waybill.findUnique({
+      where: { id: waybillId },
+      include: {
+        items: true,
+        rmas: {
+          include: { lines: true }
+        }
+      }
+    });
+
+    if (!waybill) {
+      throw new NotFoundException('Waybill not found');
+    }
+    if (waybill.status !== 'DELIVERED') {
+      throw new BadRequestException('Returns are only allowed for DELIVERED waybills');
+    }
+
+    const defaultWarehouse = await db.warehouse.findFirst({ where: { isDefault: true } });
+    const targetWarehouseId = waybill.warehouseId || defaultWarehouse?.id || 'default-main-warehouse';
+
+    for (const item of items) {
+      if (!item.sku || typeof item.quantity !== 'number' || item.quantity <= 0) {
+        throw new BadRequestException(`Invalid return item format or non-positive quantity for SKU ${item.sku}`);
+      }
+
+      const shippedItem = waybill.items.find((i: any) => i.sku === item.sku);
+      if (!shippedItem) {
+        throw new BadRequestException(`SKU ${item.sku} was not shipped in waybill ${waybill.number}`);
+      }
+
+      const shippedQty = Number(shippedItem.quantity);
+      let existingReturnedQty = 0;
+
+      for (const rma of waybill.rmas) {
+        if (rma.status === 'DRAFT' || rma.status === 'CONFIRMED') {
+          for (const line of rma.lines) {
+            if (line.sku === item.sku) {
+              existingReturnedQty += Number(line.quantity);
+            }
+          }
+        }
+      }
+
+      if (existingReturnedQty + item.quantity > shippedQty) {
+        throw new BadRequestException(
+          `Return quantity ${item.quantity} for SKU ${item.sku} exceeds max allowable return of ${shippedQty - existingReturnedQty} (shipped: ${shippedQty}, already in RMA: ${existingReturnedQty})`
+        );
+      }
+    }
+
+    const year = new Date().getFullYear();
+    const [{ nextval: rmaSeq }] = await db.$queryRaw<Array<{ nextval: bigint }>>`
+      SELECT nextval('rma_number_seq') as nextval;
+    `;
+    const rmaNumber = `RMA-${year}-${rmaSeq.toString().padStart(4, '0')}`;
+
+    return db.rma.create({
+      data: {
+        number: rmaNumber,
+        waybillId,
+        reason: reason || null,
+        status: 'DRAFT',
+        lines: {
+          create: items.map((i) => ({
+            sku: i.sku,
+            warehouseId: targetWarehouseId,
+            quantity: i.quantity
+          }))
+        }
+      },
+      include: {
+        lines: true
+      }
+    });
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Post('rma/:id/confirm')
+  async confirmRma(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const rma = await db.rma.findUnique({ where: { id }, include: { lines: true } });
+    if (!rma) throw new NotFoundException('RMA not found');
+
+    return db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Rma" SET status = 'CONFIRMED', "confirmedAt" = now(), "updatedAt" = now()
+        WHERE id = ${id} AND status = 'DRAFT'
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException('Only draft RMA requests can be confirmed');
+      }
+
+      for (const line of rma.lines) {
+        const lineQty = Number(line.quantity);
+        const existing = await tx.stockItem.findUnique({
+          where: {
+            sku_warehouseId: {
+              sku: line.sku,
+              warehouseId: line.warehouseId
+            }
+          }
+        });
+
+        if (existing) {
+          await tx.stockItem.update({
+            where: {
+              sku_warehouseId: {
+                sku: line.sku,
+                warehouseId: line.warehouseId
+              }
+            },
+            data: {
+              quantity: { increment: lineQty }
+            }
+          });
+        } else {
+          await tx.stockItem.create({
+            data: {
+              sku: line.sku,
+              warehouseId: line.warehouseId,
+              quantity: lineQty,
+              reserved: 0
+            }
+          });
+        }
+      }
+
+      return rows[0];
+    });
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Post('rma/:id/cancel')
+  async cancelRma(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const rma = await db.rma.findUnique({ where: { id } });
+    if (!rma) throw new NotFoundException('RMA not found');
+
+    return db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Rma" SET status = 'CANCELLED', "updatedAt" = now()
+        WHERE id = ${id} AND status = 'DRAFT'
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException('Only draft RMA requests can be cancelled');
+      }
+
+      return rows[0];
+    });
+  }
+
   // --- Purchasing (Suppliers & Purchase Orders) ---
 
   @Roles('ERP_PURCHASER', 'ERP_CEO')

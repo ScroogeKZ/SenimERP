@@ -106,6 +106,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'EsfStatus' AND n.nspname = '${schema}') THEN
                   CREATE TYPE "${schema}"."EsfStatus" AS ENUM ('PENDING', 'SUBMITTED', 'REGISTERED', 'REJECTED', 'FAILED');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'RmaStatus' AND n.nspname = '${schema}') THEN
+                  CREATE TYPE "${schema}"."RmaStatus" AS ENUM ('DRAFT', 'CONFIRMED', 'CANCELLED');
+                END IF;
               END$$;
             `);
 
@@ -463,6 +466,33 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`
               ALTER TABLE "${schema}"."PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_warehouseId_fkey"
                 FOREIGN KEY ("warehouseId") REFERENCES "${schema}"."Warehouse"("id") ON DELETE SET NULL;
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."Rma" (
+                "id" TEXT PRIMARY KEY,
+                "number" TEXT UNIQUE NOT NULL,
+                "waybillId" TEXT NOT NULL REFERENCES "${schema}"."Waybill"("id") ON DELETE CASCADE,
+                "status" TEXT NOT NULL DEFAULT 'DRAFT',
+                "reason" TEXT,
+                "confirmedAt" TIMESTAMP,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."RmaLine" (
+                "id" TEXT PRIMARY KEY,
+                "rmaId" TEXT NOT NULL REFERENCES "${schema}"."Rma"("id") ON DELETE CASCADE,
+                "sku" TEXT NOT NULL,
+                "warehouseId" TEXT NOT NULL REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE,
+                "quantity" DECIMAL(12, 3) NOT NULL
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE SEQUENCE IF NOT EXISTS "${schema}"."rma_number_seq" START WITH 1 INCREMENT BY 1;
             `);
           },
           {
