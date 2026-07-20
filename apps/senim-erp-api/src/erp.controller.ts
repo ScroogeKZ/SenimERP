@@ -957,6 +957,11 @@ export class ErpController {
       if (!po) {
         throw new NotFoundException('Purchase Order not found');
       }
+      if (po.supplierId !== supplierId) {
+        throw new BadRequestException(
+          `Purchase order ${purchaseOrderId} belongs to a different supplier`
+        );
+      }
     }
 
     const year = new Date().getFullYear();

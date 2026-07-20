@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { PrismaClient } from '@prisma/client';
 import { signSsoToken } from '@senimerp/auth-client';
 import { NestFactory } from '@nestjs/core';
@@ -174,6 +175,44 @@ async function runApTest() {
   }
   const overpayErr = await overpayRes.json();
   console.log(`[Test] Overpayment successfully rejected with HTTP ${overpayRes.status}: ${JSON.stringify(overpayErr)}`);
+
+  // Step F: Test cross-validation between supplierId and purchaseOrderId mismatch
+  console.log('[Test] Step F: Testing supplierId vs purchaseOrderId mismatch validation...');
+  const supplier2Res = await fetch(`${baseUrl}/api/suppliers`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: 'ТОО "Второй Поставщик"',
+      bin: `99${Math.floor(100000000 + Math.random() * 900000000)}`,
+      email: 'supplier2@senim.kz'
+    })
+  });
+  if (!supplier2Res.ok) throw new Error(`Failed to create supplier2: ${await supplier2Res.text()}`);
+  const supplier2 = await supplier2Res.json();
+
+  const po2Id = `po_test_${Date.now()}`;
+  const testDbClient = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } } });
+  await testDbClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."PurchaseOrder" (id, number, "supplierId", status)
+    VALUES ('${po2Id}', 'PO-TEST-MISMATCH', '${supplier2.id}', 'SENT');
+  `);
+  await testDbClient.$disconnect();
+
+  const mismatchRes = await fetch(`${baseUrl}/api/supplier-invoices`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      supplierId: supplier.id,
+      purchaseOrderId: po2Id,
+      amount: 100000
+    })
+  });
+
+  if (mismatchRes.ok) {
+    throw new Error('Expected supplierId mismatch to be rejected, but request succeeded!');
+  }
+  const mismatchErr = await mismatchRes.json();
+  console.log(`[Test] SupplierId mismatch successfully rejected with HTTP ${mismatchRes.status}: ${JSON.stringify(mismatchErr)}`);
 
   console.log('=== AP INTEGRATION TEST PASSED SUCCESSFULLY! ===');
   await app.close();
