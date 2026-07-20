@@ -55,13 +55,28 @@ export interface ExtractedSignatureDetails {
 
 /**
  * Handles parsing and validation of NCALayer digital signatures.
+ * NOTE: Currently runs in MOCK mode. Production X.509 PKCS#7 cryptographic verification
+ * against NCA RK (НУЦ РК) root certificates is not yet configured.
  */
 export class NCALayerService {
   /**
+   * Flag indicating whether NCALayer service is operating in mock mode.
+   * Controlled by environment variable NCALAYER_MOCK (defaults to true).
+   */
+  static readonly isMock: boolean = process.env.NCALAYER_MOCK !== 'false';
+
+  /**
    * Extracts and validates an XML signature.
-   * Looks for signature attributes and extracts IIN, BIN, and Name of the signer.
+   * In mock mode: parses XML wrappers and regex metadata (IIN, BIN, Name, Cert Serial).
+   * In production mode (NCALAYER_MOCK=false): throws an error as production KGD/NCA verification is not configured.
    */
   static verifySignature(signedXml: string): ExtractedSignatureDetails {
+    if (!this.isMock) {
+      throw new Error('Production NCALayer cryptographic verification endpoint not configured. Set NCALAYER_MOCK=true.');
+    }
+
+    console.warn('[NCALayerService] WARNING: Running in MOCK mode. XML signature is not cryptographically verified!');
+
     if (!signedXml.includes('<signedXml>') || !signedXml.includes('</signedXml>')) {
       throw new Error('Invalid signature structure: signedXml wrappers missing');
     }
