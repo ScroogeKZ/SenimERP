@@ -1,5 +1,7 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
+import { RolesGuard } from './roles.guard.js';
+import { Roles } from './roles.decorator.js';
 import { TenantPrismaService } from './prisma.service.js';
 import { EsfQueueService } from './esf-queue.service.js';
 import { NCALayerService } from '@senimerp/integrations';
@@ -8,7 +10,7 @@ import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLe
 import crypto from 'crypto';
 
 @Controller('api')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, RolesGuard)
 export class ErpController {
   private publisher = new EventBusPublisher();
 
@@ -27,6 +29,7 @@ export class ErpController {
 
   // --- Invoices ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('invoices')
   async getInvoices(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -36,6 +39,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('invoices/:id')
   async getInvoiceById(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -47,6 +51,7 @@ export class ErpController {
     return invoice;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('invoices/:id/sign')
   async signInvoice(
     @Param('id') id: string,
@@ -103,6 +108,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('invoices/:id/pay')
   async payInvoice(
     @Param('id') id: string,
@@ -200,6 +206,7 @@ export class ErpController {
 
   // --- Waybills ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('waybills')
   async getWaybills(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -209,6 +216,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('waybills/:id')
   async getWaybillById(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -220,6 +228,7 @@ export class ErpController {
     return waybill;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('waybills/:id/sign')
   async signWaybill(
     @Param('id') id: string,
@@ -364,6 +373,7 @@ export class ErpController {
 
   // --- Purchasing (Suppliers & Purchase Orders) ---
 
+  @Roles('ERP_PURCHASER', 'ERP_CEO')
   @Post('suppliers')
   async createSupplier(
     @Body('name') name: string,
@@ -390,6 +400,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('suppliers')
   async getSuppliers(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -398,6 +409,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_PURCHASER', 'ERP_CEO')
   @Post('purchase-orders')
   async createPurchaseOrder(
     @Body('supplierId') supplierId: string,
@@ -445,6 +457,7 @@ export class ErpController {
     }
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('purchase-orders')
   async getPurchaseOrders(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -454,6 +467,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('purchase-orders/:id')
   async getPurchaseOrderById(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -465,6 +479,7 @@ export class ErpController {
     return po;
   }
 
+  @Roles('ERP_PURCHASER', 'ERP_CEO')
   @Post('purchase-orders/:id/send')
   async sendPurchaseOrder(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -481,6 +496,7 @@ export class ErpController {
 
   // --- Warehouse ---
 
+  @Roles('ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('warehouse/receipts')
   async createReceipt(
     @Body('sku') sku: string,
@@ -602,6 +618,7 @@ export class ErpController {
     return updatedStockItem;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('stock')
   async getStock(
     @Query('sku') sku: string | undefined,
@@ -629,6 +646,7 @@ export class ErpController {
     return items;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('stock/movements')
   async getStockMovements(
     @Query('sku') sku: string | undefined,
@@ -671,6 +689,7 @@ export class ErpController {
 
   // --- Service Acts ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('acts')
   async getActs(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -680,6 +699,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('acts/:id')
   async getActById(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -691,6 +711,7 @@ export class ErpController {
     return act;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('acts/:id/sign')
   async signAct(
     @Param('id') id: string,
@@ -758,6 +779,7 @@ export class ErpController {
 
   // --- Debt Ledger (Реестр задолженности) ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('debtors')
   async getDebtors(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -805,6 +827,7 @@ export class ErpController {
 
   // --- Supplier Invoices (AP) ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('supplier-invoices')
   async createSupplierInvoice(
     @Body('supplierId') supplierId: string,
@@ -866,6 +889,7 @@ export class ErpController {
     }
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('supplier-invoices')
   async getSupplierInvoices(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -879,6 +903,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('supplier-invoices/:id')
   async getSupplierInvoiceById(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -894,6 +919,7 @@ export class ErpController {
     return invoice;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('supplier-invoices/:id/pay')
   async paySupplierInvoice(
     @Param('id') id: string,
@@ -963,6 +989,7 @@ export class ErpController {
     });
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('suppliers/debt')
   async getSuppliersDebt(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -999,6 +1026,7 @@ export class ErpController {
 
   // --- IS ESF Integration Endpoints ---
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('esf/:id')
   async getEsfDocument(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1010,6 +1038,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('invoices/:id/esf')
   async getInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1020,6 +1049,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('waybills/:id/esf')
   async getWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1030,6 +1060,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
   @Get('acts/:id/esf')
   async getActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1040,6 +1071,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('esf/:id/retry')
   async retryEsfSubmission(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1085,6 +1117,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('invoices/:id/esf/retry')
   async retryInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1119,6 +1152,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('waybills/:id/esf/retry')
   async retryWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
@@ -1153,6 +1187,7 @@ export class ErpController {
     return esfDoc;
   }
 
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('acts/:id/esf/retry')
   async retryActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
