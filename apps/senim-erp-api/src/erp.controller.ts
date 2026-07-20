@@ -59,12 +59,33 @@ export class ErpController {
     // Verify digital signature structure using NCALayer helper
     const certDetails = NCALayerService.verifySignature(signedXml);
 
-    const invoice = await db.invoice.findUnique({ where: { id } });
-    if (!invoice) throw new NotFoundException('Invoice not found');
-    if (invoice.status !== 'DRAFT') throw new BadRequestException('Only draft invoices can be signed');
+    let updated: any = null;
 
-    // Update invoice state and write signature record in a transaction
-    const updated = await db.$transaction(async (tx: any) => {
+    // Update invoice state and write signature record in an atomic transaction
+    await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Invoice"
+        SET "status" = 'ISSUED',
+            "signedXml" = ${signedXml},
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" = 'DRAFT'
+        RETURNING *;
+      `;
+
+      if (rows.length === 0) {
+        const existing = await tx.invoice.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Invoice not found');
+        }
+        if (existing.status !== 'DRAFT') {
+          throw new BadRequestException('Only draft invoices can be signed');
+        }
+        throw new BadRequestException('Invoice signing cannot be processed');
+      }
+
+      updated = rows[0];
+
       await tx.documentSignature.create({
         data: {
           invoiceId: id,
@@ -73,19 +94,13 @@ export class ErpController {
           certSerial: certDetails.certSerial
         }
       });
-
-      return tx.invoice.update({
-        where: { id },
-        data: {
-          status: 'ISSUED',
-          signedXml
-        },
-        include: { customer: true }
-      });
     });
 
-    console.log(`[ERP API] Invoice ${invoice.number} signed by ${certDetails.signedBy} (IIN: ${certDetails.iin})`);
-    return updated;
+    console.log(`[ERP API] Invoice ${updated.number} signed by ${certDetails.signedBy} (IIN: ${certDetails.iin})`);
+    return db.invoice.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
   }
 
   @Post('invoices/:id/pay')
@@ -222,20 +237,35 @@ export class ErpController {
     if (!waybill) throw new NotFoundException('Waybill not found');
 
     const { updated, stockChanges } = await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Waybill"
+        SET "status" = 'DELIVERED',
+            "signedXml" = ${signedXml},
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" = 'DRAFT'
+        RETURNING *;
+      `;
+
+      if (rows.length === 0) {
+        const existing = await tx.waybill.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Waybill not found');
+        }
+        if (existing.status !== 'DRAFT') {
+          throw new BadRequestException('Only draft waybills can be signed');
+        }
+        throw new BadRequestException('Waybill signing cannot be processed');
+      }
+
+      const waybillUpdate = rows[0];
+
       await tx.documentSignature.create({
         data: {
           waybillId: id,
           signedBy: certDetails.signedBy,
           iin: certDetails.iin,
           certSerial: certDetails.certSerial
-        }
-      });
-
-      const waybillUpdate = await tx.waybill.update({
-        where: { id },
-        data: {
-          status: 'DELIVERED',
-          signedXml
         }
       });
 
@@ -660,10 +690,32 @@ export class ErpController {
     const db = await this.getDb(req);
     const certDetails = NCALayerService.verifySignature(signedXml);
 
-    const act = await db.serviceAct.findUnique({ where: { id } });
-    if (!act) throw new NotFoundException('Act not found');
+    let updated: any = null;
 
-    const updated = await db.$transaction(async (tx: any) => {
+    await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "ServiceAct"
+        SET "status" = 'SIGNED_BY_CUSTOMER',
+            "signedXml" = ${signedXml},
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" = 'DRAFT'
+        RETURNING *;
+      `;
+
+      if (rows.length === 0) {
+        const existing = await tx.serviceAct.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Act not found');
+        }
+        if (existing.status !== 'DRAFT') {
+          throw new BadRequestException('Only draft acts can be signed');
+        }
+        throw new BadRequestException('Act signing cannot be processed');
+      }
+
+      updated = rows[0];
+
       await tx.documentSignature.create({
         data: {
           actId: id,
@@ -672,17 +724,9 @@ export class ErpController {
           certSerial: certDetails.certSerial
         }
       });
-
-      return tx.serviceAct.update({
-        where: { id },
-        data: {
-          status: 'SIGNED_BY_CUSTOMER',
-          signedXml
-        }
-      });
     });
 
-    console.log(`[ERP API] Service Act ${act.number} signed.`);
+    console.log(`[ERP API] Service Act ${updated.number} signed.`);
 
     // Create EsfDocument and enqueue ESF submission for service turnover
     const esfDoc = await db.esfDocument.upsert({
