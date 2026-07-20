@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
+import { PrismaClient } from '@prisma/client';
 import { redisConnection } from '@senimerp/event-bus-client';
 import { EsfXmlGenerator, EsfSoapClient, EsfDocumentData } from '@senimerp/integrations';
 import { TenantPrismaService } from './prisma.service.js';
@@ -236,6 +237,53 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
    * Periodic check for any SUBMITTED documents awaiting registration confirmation.
    */
   private async pollSubmittedDocuments() {
-    // Standard implementation for polling documents in SUBMITTED state across active schemas
+    const baseDbUrl = process.env.DATABASE_BASE_URL || 'postgresql://postgres:postgres@localhost:5434/senimerp_dev';
+    const baseClient = new PrismaClient({ datasources: { db: { url: `${baseDbUrl}?schema=public` } } });
+
+    try {
+      const schemas = await baseClient.$queryRaw<Array<{ schema_name: string }>>`
+        SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'tenant_%';
+      `;
+
+      for (const { schema_name } of schemas) {
+        try {
+          const tenantId = schema_name.replace('tenant_', '');
+          const db = await this.prismaService.getTenantClient(tenantId);
+
+          const submittedDocs = await db.esfDocument.findMany({ where: { status: 'SUBMITTED' } });
+
+          for (const doc of submittedDocs) {
+            if (!doc.esfRegNumber) continue;
+            try {
+              const result = await this.soapClient.checkStatus(doc.esfRegNumber);
+              if (result.status !== 'SUBMITTED') {
+                const updateData: any = {
+                  status: result.status,
+                  esfRegNumber: result.esfRegNumber || doc.esfRegNumber,
+                  responseXml: result.responseXml || doc.responseXml,
+                  errorMessage: result.errorMessage || null
+                };
+                if (result.status === 'REGISTERED') {
+                  updateData.confirmedAt = new Date();
+                }
+                await db.esfDocument.update({
+                  where: { id: doc.id },
+                  data: updateData
+                });
+                console.log(`[EsfWorkerService] Polled EsfDocument ${doc.id}: SUBMITTED → ${result.status}`);
+              }
+            } catch (err: any) {
+              console.error(`[EsfWorkerService] Failed to poll status for EsfDocument ${doc.id}:`, err?.message || err);
+            }
+          }
+        } catch (tenantErr: any) {
+          console.error(`[EsfWorkerService] Error polling tenant schema ${schema_name}:`, tenantErr?.message || tenantErr);
+        }
+      }
+    } catch (err: any) {
+      console.error('[EsfWorkerService] Failed to query tenant schemas for polling:', err?.message || err);
+    } finally {
+      await baseClient.$disconnect();
+    }
   }
 }
