@@ -642,6 +642,18 @@ export class ErpController {
             throw new BadRequestException(`Purchase order item ${targetItemId} not found`);
           }
 
+          if (item.sku !== sku) {
+            throw new BadRequestException(
+              `Purchase order item ${targetItemId} is for SKU ${item.sku}, but receipt is for SKU ${sku}`
+            );
+          }
+
+          if (purchaseOrderId && item.purchaseOrderId !== purchaseOrderId) {
+            throw new BadRequestException(
+              `Purchase order item ${targetItemId} does not belong to purchase order ${purchaseOrderId}`
+            );
+          }
+
           const prevReceived = Number(item.receivedQty);
           const orderedQty = Number(item.quantity);
           const remaining = orderedQty - prevReceived;

@@ -132,6 +132,58 @@ async function runStockTest() {
   const invalidTypeErr = await invalidTypeRes.json();
   console.log(`[Test 6 SUCCESS] Rejected with HTTP ${invalidTypeRes.status}: ${JSON.stringify(invalidTypeErr)}`);
 
+  // Step 7: Test purchaseOrderItemId cross-validation (SKU mismatch & PO ID mismatch)
+  console.log('\n[Test 7] Testing purchaseOrderItemId cross-validation...');
+  const tenantClient2 = new PrismaClient({
+    datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } }
+  });
+  await tenantClient2.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Supplier" (id, name) VALUES ('sup_test_7', 'Поставщик Тест 7');
+  `);
+  await tenantClient2.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."PurchaseOrder" (id, number, "supplierId") VALUES ('po_test_7', 'PO-TEST-007', 'sup_test_7');
+  `);
+  await tenantClient2.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."PurchaseOrderItem" (id, "purchaseOrderId", sku, name, quantity, price)
+    VALUES ('poi_test_7', 'po_test_7', 'SKU-PO-ITEM-01', 'Товар ПО 7', 10, 500);
+  `);
+  await tenantClient2.$disconnect();
+
+  // Test 7a: SKU mismatch
+  const skuMismatchRes = await fetch(`${baseUrl}/api/warehouse/receipts`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      sku: 'SKU-WRONG-999',
+      quantity: 5,
+      warehouseId: defaultWarehouseId,
+      purchaseOrderItemId: 'poi_test_7'
+    })
+  });
+  if (skuMismatchRes.ok) {
+    throw new Error('Receipt with SKU mismatch was expected to be rejected, but succeeded!');
+  }
+  const skuMismatchErr = await skuMismatchRes.json();
+  console.log(`[Test 7a SUCCESS] Rejected SKU mismatch: ${JSON.stringify(skuMismatchErr.message)}`);
+
+  // Test 7b: purchaseOrderId mismatch
+  const poMismatchRes = await fetch(`${baseUrl}/api/warehouse/receipts`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      sku: 'SKU-PO-ITEM-01',
+      quantity: 5,
+      warehouseId: defaultWarehouseId,
+      purchaseOrderId: 'po_wrong_id_999',
+      purchaseOrderItemId: 'poi_test_7'
+    })
+  });
+  if (poMismatchRes.ok) {
+    throw new Error('Receipt with purchaseOrderId mismatch was expected to be rejected, but succeeded!');
+  }
+  const poMismatchErr = await poMismatchRes.json();
+  console.log(`[Test 7b SUCCESS] Rejected purchaseOrderId mismatch: ${JSON.stringify(poMismatchErr.message)}`);
+
   console.log('\n=== STOCK BALANCE & MOVEMENTS INTEGRATION TEST PASSED SUCCESSFULLY! ===');
 
   await app.close();
