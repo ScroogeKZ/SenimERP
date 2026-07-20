@@ -286,6 +286,112 @@ export class ErpController {
     return updated;
   }
 
+  // --- Purchasing (Suppliers & Purchase Orders) ---
+
+  @Post('suppliers')
+  async createSupplier(
+    @Body('name') name: string,
+    @Body('bin') bin: string | undefined,
+    @Body('address') address: string | undefined,
+    @Body('email') email: string | undefined,
+    @Body('phone') phone: string | undefined,
+    @Body('bankAccount') bankAccount: string | undefined,
+    @Body('bankBik') bankBik: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (!name || typeof name !== 'string') throw new BadRequestException('Supplier name is required');
+    const db = this.getDb(req);
+    return db.supplier.create({
+      data: {
+        name,
+        bin: bin || null,
+        address: address || null,
+        email: email || null,
+        phone: phone || null,
+        bankAccount: bankAccount || null,
+        bankBik: bankBik || null
+      }
+    });
+  }
+
+  @Get('suppliers')
+  async getSuppliers(@Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    return db.supplier.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  @Post('purchase-orders')
+  async createPurchaseOrder(
+    @Body('supplierId') supplierId: string,
+    @Body('expectedDate') expectedDateStr: string | undefined,
+    @Body('items') itemsData: Array<{ sku: string; crmProductId?: string; name: string; quantity: number; price: number }>,
+    @Req() req: RequestWithUser
+  ) {
+    if (!supplierId) throw new BadRequestException('supplierId is required');
+    if (!itemsData || !Array.isArray(itemsData) || itemsData.length === 0) {
+      throw new BadRequestException('At least one item is required in purchase order');
+    }
+    const db = this.getDb(req);
+    const poNumber = `PO-${Date.now().toString().slice(-6)}`;
+    const expectedDate = expectedDateStr ? new Date(expectedDateStr) : null;
+
+    return db.purchaseOrder.create({
+      data: {
+        number: poNumber,
+        supplierId,
+        expectedDate,
+        status: 'DRAFT',
+        items: {
+          create: itemsData.map((item) => ({
+            sku: item.sku,
+            crmProductId: item.crmProductId || null,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+            receivedQty: 0
+          }))
+        }
+      },
+      include: { supplier: true, items: true }
+    });
+  }
+
+  @Get('purchase-orders')
+  async getPurchaseOrders(@Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    return db.purchaseOrder.findMany({
+      include: { supplier: true, items: true },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  @Get('purchase-orders/:id')
+  async getPurchaseOrderById(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const po = await db.purchaseOrder.findUnique({
+      where: { id },
+      include: { supplier: true, items: true }
+    });
+    if (!po) throw new NotFoundException('Purchase Order not found');
+    return po;
+  }
+
+  @Post('purchase-orders/:id/send')
+  async sendPurchaseOrder(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const po = await db.purchaseOrder.findUnique({ where: { id } });
+    if (!po) throw new NotFoundException('Purchase Order not found');
+    if (po.status !== 'DRAFT') throw new BadRequestException('Only DRAFT purchase orders can be sent');
+
+    return db.purchaseOrder.update({
+      where: { id },
+      data: { status: 'SENT' },
+      include: { supplier: true, items: true }
+    });
+  }
+
   // --- Warehouse ---
 
   @Post('warehouse/receipts')
@@ -293,6 +399,8 @@ export class ErpController {
     @Body('sku') sku: string,
     @Body('quantity') quantity: number,
     @Body('referenceId') referenceId: string | undefined,
+    @Body('purchaseOrderId') purchaseOrderId: string | undefined,
+    @Body('purchaseOrderItemId') purchaseOrderItemId: string | undefined,
     @Req() req: RequestWithUser
   ) {
     if (!sku || typeof sku !== 'string') throw new BadRequestException('sku is required');
@@ -302,6 +410,7 @@ export class ErpController {
     const db = this.getDb(req);
 
     const updatedStockItem = await db.$transaction(async (tx: any) => {
+      // 1. Upsert StockItem
       const stockItem = await tx.stockItem.upsert({
         where: { sku },
         update: {
@@ -313,14 +422,75 @@ export class ErpController {
         }
       });
 
+      // 2. Record StockMovement
+      const finalReferenceId = purchaseOrderId || referenceId || null;
       await tx.stockMovement.create({
         data: {
           sku,
           quantity,
           type: 'receipt',
-          referenceId: referenceId || null
+          referenceId: finalReferenceId
         }
       });
+
+      // 3. Increment PurchaseOrderItem.receivedQty and recalculate PurchaseOrder.status atomically
+      if (purchaseOrderId || purchaseOrderItemId) {
+        let targetItemId = purchaseOrderItemId;
+
+        if (!targetItemId && purchaseOrderId) {
+          const matchingItems = await tx.purchaseOrderItem.findMany({
+            where: { purchaseOrderId, sku }
+          });
+
+          if (matchingItems.length === 0) {
+            throw new BadRequestException(`Purchase order item for SKU ${sku} not found in purchase order ${purchaseOrderId}`);
+          }
+          if (matchingItems.length > 1) {
+            throw new BadRequestException(`Multiple items found for SKU ${sku} in purchase order ${purchaseOrderId}. Please specify purchaseOrderItemId.`);
+          }
+          targetItemId = matchingItems[0].id;
+        }
+
+        if (targetItemId) {
+          const item = await tx.purchaseOrderItem.findUnique({ where: { id: targetItemId } });
+          if (!item) {
+            throw new BadRequestException(`Purchase order item ${targetItemId} not found`);
+          }
+
+          const prevReceived = Number(item.receivedQty);
+          const orderedQty = Number(item.quantity);
+          const remaining = orderedQty - prevReceived;
+
+          if (quantity > remaining) {
+            console.warn(`[ERP API] Over-delivery warning for PO item ${targetItemId} (SKU: ${sku}): Receiving +${quantity}, but remaining was ${remaining}.`);
+          }
+
+          await tx.purchaseOrderItem.update({
+            where: { id: targetItemId },
+            data: { receivedQty: { increment: quantity } }
+          });
+
+          // Recalculate Purchase Order status
+          const poId = item.purchaseOrderId;
+          const allItems = await tx.purchaseOrderItem.findMany({ where: { purchaseOrderId: poId } });
+
+          let allFullyReceived = true;
+          let anyReceived = false;
+
+          for (const i of allItems) {
+            const rec = Number(i.id === targetItemId ? Number(i.receivedQty) + quantity : i.receivedQty);
+            const ord = Number(i.quantity);
+            if (rec < ord) allFullyReceived = false;
+            if (rec > 0) anyReceived = true;
+          }
+
+          const newPoStatus = allFullyReceived ? 'RECEIVED' : (anyReceived ? 'PARTIALLY_RECEIVED' : 'SENT');
+          await tx.purchaseOrder.update({
+            where: { id: poId },
+            data: { status: newPoStatus }
+          });
+        }
+      }
 
       return stockItem;
     });
@@ -344,6 +514,7 @@ export class ErpController {
 
     return updatedStockItem;
   }
+
 
   // --- Service Acts ---
 

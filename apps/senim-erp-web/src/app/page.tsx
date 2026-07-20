@@ -11,22 +11,26 @@ import {
   Activity, 
   ChevronRight, 
   CheckCircle, 
-  AlertTriangle 
+  AlertTriangle,
+  ShoppingBag
 } from 'lucide-react';
 
 export default function ErpDashboard() {
-  const [activeTab, setActiveTab] = useState<'invoices' | 'waybills' | 'acts' | 'debtors'>('invoices');
+  const [activeTab, setActiveTab] = useState<'invoices' | 'waybills' | 'acts' | 'debtors' | 'purchasing'>('invoices');
   const [ssoToken, setSsoToken] = useState<string>('');
   const [user, setUser] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [waybills, setWaybills] = useState<any[]>([]);
   const [acts, setActs] = useState<any[]>([]);
   const [debtors, setDebtors] = useState<any[]>([]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
   
   // Modals / Details state
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
   const [selectedWaybill, setSelectedWaybill] = useState<any>(null);
   const [selectedAct, setSelectedAct] = useState<any>(null);
+  const [selectedPo, setSelectedPo] = useState<any>(null);
   const [payAmount, setPayAmount] = useState<string>('');
   
   // Status alerts
@@ -79,6 +83,12 @@ export default function ErpDashboard() {
 
       const debtRes = await fetch('http://localhost:3004/api/debtors', { headers });
       if (debtRes.ok) setDebtors(await debtRes.json());
+
+      const supRes = await fetch('http://localhost:3004/api/suppliers', { headers });
+      if (supRes.ok) setSuppliers(await supRes.json());
+
+      const poRes = await fetch('http://localhost:3004/api/purchase-orders', { headers });
+      if (poRes.ok) setPurchaseOrders(await poRes.json());
     } catch (e) {
       console.error('Failed to fetch ERP data', e);
       triggerAlert('error', 'Ошибка подключения к ERP API. Убедитесь, что сервер API запущен.');
@@ -379,6 +389,15 @@ export default function ErpDashboard() {
             <TrendingUp className="w-4 h-4" />
             <span>Долги</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('purchasing')}
+            className={`flex-1 py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-2 ${
+              activeTab === 'purchasing' ? 'bg-indigo-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4" />
+            <span>Закупки</span>
+          </button>
         </div>
 
         {/* Tab contents */}
@@ -534,6 +553,84 @@ export default function ErpDashboard() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {/* --- Purchasing Tab --- */}
+            {activeTab === 'purchasing' && (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-bold">Заказы поставщикам (Purchase Orders)</h2>
+                </div>
+
+                {purchaseOrders.length === 0 ? (
+                  <p className="text-slate-500 text-sm glass p-6 rounded-2xl text-center">Заказов поставщикам не найдено.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {purchaseOrders.map(po => {
+                      const totalOrdered = po.items ? po.items.reduce((acc: number, i: any) => acc + Number(i.quantity), 0) : 0;
+                      const totalReceived = po.items ? po.items.reduce((acc: number, i: any) => acc + Number(i.receivedQty), 0) : 0;
+                      const progressPct = totalOrdered > 0 ? Math.min(100, Math.round((totalReceived / totalOrdered) * 100)) : 0;
+
+                      return (
+                        <div 
+                          key={po.id} 
+                          onClick={() => { setSelectedPo(po); setSelectedInvoice(null); setSelectedWaybill(null); setSelectedAct(null); }}
+                          className={`glass p-4 rounded-xl space-y-3 cursor-pointer transition-all hover:border-slate-600 ${
+                            selectedPo?.id === po.id ? 'ring-2 ring-indigo-500 border-transparent' : ''
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-bold text-slate-100">{po.number}</p>
+                              <p className="text-xs text-slate-400">Поставщик: {po.supplier?.name || 'Не указан'}</p>
+                            </div>
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                              po.status === 'RECEIVED' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                              po.status === 'PARTIALLY_RECEIVED' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                              po.status === 'SENT' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' :
+                              'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            }`}>
+                              {po.status === 'DRAFT' ? 'Черновик' :
+                               po.status === 'SENT' ? 'Отправлен' :
+                               po.status === 'PARTIALLY_RECEIVED' ? 'Частично получен' :
+                               po.status === 'RECEIVED' ? 'Получен' : po.status}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1 text-xs">
+                            <div className="flex justify-between text-[11px] text-slate-400">
+                              <span>Прогресс прихода: {totalReceived} / {totalOrdered} шт ({progressPct}%)</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div className="h-full bg-indigo-500 transition-all" style={{ width: `${progressPct}%` }}></div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Suppliers directory summary */}
+                <div className="glass p-6 rounded-2xl space-y-4">
+                  <h3 className="text-lg font-bold">Справочник поставщиков</h3>
+                  <div className="divide-y divide-slate-800 text-xs">
+                    {suppliers.length === 0 ? (
+                      <p className="text-slate-500 text-center py-2">Поставщики не внесены.</p>
+                    ) : (
+                      suppliers.map(s => (
+                        <div key={s.id} className="py-2.5 flex justify-between items-center">
+                          <div>
+                            <p className="font-bold text-slate-200">{s.name}</p>
+                            <p className="text-[10px] text-slate-400">БИН: {s.bin || 'Не указан'} | Тел: {s.phone || '-'}</p>
+                          </div>
+                          <span className="text-[10px] font-mono text-slate-500">{s.email || ''}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </div>
             )}

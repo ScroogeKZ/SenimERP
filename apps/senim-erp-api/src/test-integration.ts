@@ -37,6 +37,9 @@ async function runTest() {
   
   await publicClient.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
   
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."PurchaseOrderItem" CASCADE;`);
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."PurchaseOrder" CASCADE;`);
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."Supplier" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."EsfDocument" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockMovement" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockItem" CASCADE;`);
@@ -66,6 +69,9 @@ async function runTest() {
        IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'EsfStatus' AND n.nspname = '${schemaName}') THEN
          CREATE TYPE "${schemaName}"."EsfStatus" AS ENUM ('PENDING', 'SUBMITTED', 'REGISTERED', 'REJECTED', 'FAILED');
        END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'PurchaseOrderStatus' AND n.nspname = '${schemaName}') THEN
+         CREATE TYPE "${schemaName}"."PurchaseOrderStatus" AS ENUM ('DRAFT', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED');
+       END IF;
      END$$;`,
     `CREATE TABLE "${schemaName}"."Customer" (id TEXT PRIMARY KEY, "crmId" TEXT UNIQUE, name TEXT NOT NULL, bin TEXT UNIQUE NOT NULL, address TEXT, email TEXT, phone TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."Invoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP NOT NULL, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
@@ -76,6 +82,9 @@ async function runTest() {
     `CREATE TABLE "${schemaName}"."ActLineItem" (id TEXT PRIMARY KEY, "actId" TEXT NOT NULL REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."DocumentSignature" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, "signedBy" TEXT NOT NULL, iin TEXT NOT NULL, "certSerial" TEXT NOT NULL, "signedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."EsfDocument" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, status TEXT DEFAULT 'PENDING', "esfRegNumber" TEXT, "requestXml" TEXT, "responseXml" TEXT, "errorMessage" TEXT, "submittedAt" TIMESTAMP, "confirmedAt" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."Supplier" (id TEXT PRIMARY KEY, name TEXT NOT NULL, bin TEXT UNIQUE, address TEXT, email TEXT, phone TEXT, "bankAccount" TEXT, "bankBik" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."PurchaseOrder" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, status TEXT DEFAULT 'DRAFT', "expectedDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."PurchaseOrderItem" (id TEXT PRIMARY KEY, "purchaseOrderId" TEXT NOT NULL REFERENCES "${schemaName}"."PurchaseOrder"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, "receivedQty" DECIMAL(12,3) DEFAULT 0 NOT NULL, price DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
@@ -409,6 +418,111 @@ async function runTest() {
     throw new Error(`Verification Failed: Unstocked item should have negative quantity -5, found ${unstockedItem?.quantity}`);
   }
   console.log('✓ Edge case verified: Unstocked item created with negative balance -5 and processed gracefully.');
+
+  // 10. Test Suppliers & Purchase Orders Lifecycle
+  console.log('[Test] Testing Suppliers & Purchase Orders lifecycle...');
+
+  // 10.1 Create Supplier
+  const supplierRes = await fetch('http://localhost:3004/api/suppliers', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({
+      name: 'ТОО КазПоставка',
+      bin: '010203040506',
+      phone: '+7 701 111 2233',
+      email: 'sales@kazpostavka.kz'
+    })
+  });
+  if (!supplierRes.ok) throw new Error(`Create supplier failed with status ${supplierRes.status}`);
+  const supplier = await supplierRes.json() as any;
+  console.log(`✓ Supplier created: ${supplier.name} (ID: ${supplier.id}).`);
+
+  // 10.2 Create Purchase Order (100 units of SKU-002)
+  const poRes = await fetch('http://localhost:3004/api/purchase-orders', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({
+      supplierId: supplier.id,
+      items: [
+        { sku: 'SKU-002', name: 'Коммутатор Cisco 24P', quantity: 100, price: 45000 }
+      ]
+    })
+  });
+  if (!poRes.ok) throw new Error(`Create PurchaseOrder failed with status ${poRes.status}`);
+  const po = await poRes.json() as any;
+  if (po.status !== 'DRAFT') throw new Error(`Expected PO status DRAFT, got ${po.status}`);
+  console.log(`✓ Purchase Order created: ${po.number} (Status: DRAFT).`);
+
+  // 10.3 Send Purchase Order (DRAFT -> SENT)
+  const sendPoRes = await fetch(`http://localhost:3004/api/purchase-orders/${po.id}/send`, {
+    method: 'POST',
+    headers: apiHeaders
+  });
+  if (!sendPoRes.ok) throw new Error(`Send PO failed with status ${sendPoRes.status}`);
+  const sentPo = await sendPoRes.json() as any;
+  if (sentPo.status !== 'SENT') throw new Error(`Expected PO status SENT, got ${sentPo.status}`);
+  console.log(`✓ Purchase Order marked SENT.`);
+
+  // 10.4 Partial Receipt 1: Receive 60 units of SKU-002
+  const receipt1Res = await fetch('http://localhost:3004/api/warehouse/receipts', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({
+      sku: 'SKU-002',
+      quantity: 60,
+      purchaseOrderId: po.id
+    })
+  });
+  if (!receipt1Res.ok) throw new Error(`Partial receipt 1 failed with status ${receipt1Res.status}`);
+  
+  const poAfterRec1 = await (db as any).purchaseOrder.findUnique({
+    where: { id: po.id },
+    include: { items: true }
+  });
+  if (poAfterRec1.status !== 'PARTIALLY_RECEIVED') {
+    throw new Error(`Expected PO status PARTIALLY_RECEIVED after 60/100, got ${poAfterRec1.status}`);
+  }
+  if (Number(poAfterRec1.items[0].receivedQty) !== 60) {
+    throw new Error(`Expected receivedQty 60, got ${poAfterRec1.items[0].receivedQty}`);
+  }
+  console.log('✓ Partial receipt (60/100) verified: PO status PARTIALLY_RECEIVED, receivedQty = 60.');
+
+  // 10.5 Partial Receipt 2: Receive remaining 40 units of SKU-002
+  const receipt2Res = await fetch('http://localhost:3004/api/warehouse/receipts', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({
+      sku: 'SKU-002',
+      quantity: 40,
+      purchaseOrderId: po.id
+    })
+  });
+  if (!receipt2Res.ok) throw new Error(`Full receipt 2 failed with status ${receipt2Res.status}`);
+
+  const poAfterRec2 = await (db as any).purchaseOrder.findUnique({
+    where: { id: po.id },
+    include: { items: true }
+  });
+  if (poAfterRec2.status !== 'RECEIVED') {
+    throw new Error(`Expected PO status RECEIVED after 100/100, got ${poAfterRec2.status}`);
+  }
+  if (Number(poAfterRec2.items[0].receivedQty) !== 100) {
+    throw new Error(`Expected receivedQty 100, got ${poAfterRec2.items[0].receivedQty}`);
+  }
+  console.log('✓ Full receipt (40/100) verified: PO status RECEIVED, receivedQty = 100.');
+
+  // 10.6 Verify SKU Mismatch error throwing
+  const mismatchRes = await fetch('http://localhost:3004/api/warehouse/receipts', {
+    method: 'POST',
+    headers: apiHeaders,
+    body: JSON.stringify({
+      sku: 'NON-EXISTENT-SKU',
+      quantity: 10,
+      purchaseOrderId: po.id
+    })
+  });
+  if (mismatchRes.ok) throw new Error('Expected receipt with non-existent SKU on PO to fail with BadRequestException');
+  console.log('✓ SKU resolution mismatch error handling verified (BadRequestException thrown).');
 
   console.log('=== ALL INTEGRATION TESTS PASSED SUCCESSFULLY! ===');
   
