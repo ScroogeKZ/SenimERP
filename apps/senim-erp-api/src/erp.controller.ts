@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Req, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { TenantPrismaService } from './prisma.service.js';
 import { EsfQueueService } from './esf-queue.service.js';
@@ -515,6 +515,72 @@ export class ErpController {
     return updatedStockItem;
   }
 
+  @Get('stock')
+  async getStock(
+    @Query('sku') sku: string | undefined,
+    @Query('lowStock') lowStockStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+
+    const where: any = {};
+    if (sku && typeof sku === 'string') {
+      where.sku = sku;
+    }
+
+    const items = await db.stockItem.findMany({
+      where,
+      orderBy: { sku: 'asc' }
+    });
+
+    const isLowStock = lowStockStr === 'true' || lowStockStr === '1';
+    if (isLowStock) {
+      // In-memory post-query JS filter: quantity <= reserved (Prisma field-to-field comparison workaround)
+      return items.filter((item: any) => Number(item.quantity) <= Number(item.reserved));
+    }
+
+    return items;
+  }
+
+  @Get('stock/movements')
+  async getStockMovements(
+    @Query('sku') sku: string | undefined,
+    @Query('type') type: string | undefined,
+    @Query('referenceId') referenceId: string | undefined,
+    @Query('limit') limitStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (type && type !== 'receipt' && type !== 'shipment') {
+      throw new BadRequestException("type must be either 'receipt' or 'shipment'");
+    }
+
+    const db = await this.getDb(req);
+
+    const where: any = {};
+    if (sku && typeof sku === 'string') {
+      where.sku = sku;
+    }
+    if (type) {
+      where.type = type;
+    }
+    if (referenceId && typeof referenceId === 'string') {
+      where.referenceId = referenceId;
+    }
+
+    let limit = 50;
+    if (limitStr) {
+      const parsedLimit = parseInt(limitStr, 10);
+      if (!isNaN(parsedLimit) && parsedLimit > 0) {
+        limit = Math.min(parsedLimit, 200);
+      }
+    }
+
+    return db.stockMovement.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    });
+  }
 
   // --- Service Acts ---
 

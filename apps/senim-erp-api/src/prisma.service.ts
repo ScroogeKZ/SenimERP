@@ -298,6 +298,32 @@ export class TenantPrismaService implements OnModuleDestroy {
             `);
 
             await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."StockItem" (
+                "id" TEXT PRIMARY KEY,
+                "sku" TEXT UNIQUE NOT NULL,
+                "crmProductId" TEXT,
+                "quantity" DECIMAL(12, 3) NOT NULL DEFAULT 0,
+                "reserved" DECIMAL(12, 3) NOT NULL DEFAULT 0,
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."StockMovement" (
+                "id" TEXT PRIMARY KEY,
+                "sku" TEXT NOT NULL,
+                "quantity" DECIMAL(12, 3) NOT NULL,
+                "type" TEXT NOT NULL,
+                "referenceId" TEXT,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE INDEX IF NOT EXISTS "idx_${schema}_stockmovement_sku" ON "${schema}"."StockMovement" ("sku");
+            `);
+
+            await tx.$executeRawUnsafe(`
               CREATE TABLE IF NOT EXISTS "${schema}"."ProcessedEvent" (
                 "id" TEXT PRIMARY KEY,
                 "eventType" TEXT NOT NULL,
