@@ -103,6 +103,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'SupplierInvoiceStatus' AND n.nspname = '${schema}') THEN
                   CREATE TYPE "${schema}"."SupplierInvoiceStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID', 'CANCELLED');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'EsfStatus' AND n.nspname = '${schema}') THEN
+                  CREATE TYPE "${schema}"."EsfStatus" AS ENUM ('PENDING', 'SUBMITTED', 'REGISTERED', 'REJECTED', 'FAILED');
+                END IF;
               END$$;
             `);
 
@@ -226,6 +229,24 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "iin" TEXT NOT NULL,
                 "certSerial" TEXT NOT NULL,
                 "signedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."EsfDocument" (
+                "id" TEXT PRIMARY KEY,
+                "invoiceId" TEXT UNIQUE REFERENCES "${schema}"."Invoice"("id") ON DELETE SET NULL,
+                "waybillId" TEXT UNIQUE REFERENCES "${schema}"."Waybill"("id") ON DELETE SET NULL,
+                "actId" TEXT UNIQUE REFERENCES "${schema}"."ServiceAct"("id") ON DELETE SET NULL,
+                "status" TEXT NOT NULL DEFAULT 'PENDING',
+                "esfRegNumber" TEXT,
+                "requestXml" TEXT,
+                "responseXml" TEXT,
+                "errorMessage" TEXT,
+                "submittedAt" TIMESTAMP,
+                "confirmedAt" TIMESTAMP,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
               );
             `);
 
