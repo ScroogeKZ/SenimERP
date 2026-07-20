@@ -223,6 +223,27 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             }
           }
         });
+
+        for (const line of waybillLines) {
+          const existing = await tx.stockItem.findUnique({
+            where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } }
+          });
+          if (existing) {
+            await tx.stockItem.update({
+              where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } },
+              data: { reserved: { increment: line.quantity } }
+            });
+            if (Number(existing.reserved) + Number(line.quantity) > Number(existing.quantity)) {
+              console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved exceeds physical quantity.`);
+            }
+          } else {
+            await tx.stockItem.create({
+              data: { sku: line.sku, warehouseId: defaultWarehouseId, quantity: 0, reserved: line.quantity }
+            });
+            console.warn(`[EventConsumer] Reserving SKU ${line.sku} at warehouse ${defaultWarehouseId} with zero physical stock.`);
+          }
+        }
+
         console.log(`[EventConsumer] Draft Waybill created: ${waybillNumber} for goods on warehouse ${defaultWarehouseId}.`);
       }
 

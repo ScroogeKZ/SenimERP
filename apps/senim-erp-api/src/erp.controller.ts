@@ -314,7 +314,8 @@ export class ErpController {
               }
             },
             data: {
-              quantity: { decrement: itemQty }
+              quantity: { decrement: itemQty },
+              reserved: { decrement: itemQty }
             }
           });
           newQty = Number(updatedStock.quantity);
@@ -385,6 +386,40 @@ export class ErpController {
     });
 
     return updated;
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Post('waybills/:id/cancel')
+  async cancelWaybill(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const waybill = await db.waybill.findUnique({ where: { id }, include: { items: true } });
+    if (!waybill) throw new NotFoundException('Waybill not found');
+
+    return db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Waybill" SET status = 'CANCELLED', "updatedAt" = now()
+        WHERE id = ${id} AND status = 'DRAFT'
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException('Only draft waybills can be cancelled');
+      }
+
+      const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
+      const targetWarehouseId = waybill.warehouseId || defaultWarehouse?.id || 'default-main-warehouse';
+      for (const item of waybill.items) {
+        const existingStock = await tx.stockItem.findUnique({
+          where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } }
+        });
+        if (existingStock) {
+          await tx.stockItem.update({
+            where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } },
+            data: { reserved: { decrement: Number(item.quantity) } }
+          });
+        }
+      }
+      return rows[0];
+    });
   }
 
   // --- Purchasing (Suppliers & Purchase Orders) ---
