@@ -18,18 +18,18 @@ export class ErpController {
   ) {}
 
   /**
-   * Helper to get database client for request tenant.
+   * Helper to get database client for request tenant, ensuring schema provisioning.
    */
-  private getDb(req: RequestWithUser) {
+  private async getDb(req: RequestWithUser) {
     const tenantId = req.user.tenantId;
-    return this.prismaService.getClient(tenantId);
+    return this.prismaService.getTenantClient(tenantId);
   }
 
   // --- Invoices ---
 
   @Get('invoices')
   async getInvoices(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.invoice.findMany({
       include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
@@ -38,7 +38,7 @@ export class ErpController {
 
   @Get('invoices/:id')
   async getInvoiceById(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const invoice = await db.invoice.findUnique({
       where: { id },
       include: { customer: true, items: true, signature: true, esfDocument: true }
@@ -54,7 +54,7 @@ export class ErpController {
     @Req() req: RequestWithUser
   ) {
     if (!signedXml) throw new BadRequestException('signedXml is required');
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
 
     // Verify digital signature structure using NCALayer helper
     const certDetails = NCALayerService.verifySignature(signedXml);
@@ -95,7 +95,7 @@ export class ErpController {
     @Req() req: RequestWithUser
   ) {
     if (!amountPay || amountPay <= 0) throw new BadRequestException('Valid payment amount is required');
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
 
     // Atomic increment and status calculation in a single UPDATE — eliminates lost update anomalies
     const rows = await db.$queryRaw<Array<any>>`
@@ -141,7 +141,7 @@ export class ErpController {
 
   @Get('waybills')
   async getWaybills(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.waybill.findMany({
       include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
@@ -150,7 +150,7 @@ export class ErpController {
 
   @Get('waybills/:id')
   async getWaybillById(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const waybill = await db.waybill.findUnique({
       where: { id },
       include: { customer: true, items: true, signature: true, esfDocument: true }
@@ -166,7 +166,7 @@ export class ErpController {
     @Req() req: RequestWithUser
   ) {
     if (!signedXml) throw new BadRequestException('signedXml is required');
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const certDetails = NCALayerService.verifySignature(signedXml);
 
     const waybill = await db.waybill.findUnique({
@@ -300,7 +300,7 @@ export class ErpController {
     @Req() req: RequestWithUser
   ) {
     if (!name || typeof name !== 'string') throw new BadRequestException('Supplier name is required');
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.supplier.create({
       data: {
         name,
@@ -316,7 +316,7 @@ export class ErpController {
 
   @Get('suppliers')
   async getSuppliers(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.supplier.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -333,7 +333,7 @@ export class ErpController {
     if (!itemsData || !Array.isArray(itemsData) || itemsData.length === 0) {
       throw new BadRequestException('At least one item is required in purchase order');
     }
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const poNumber = `PO-${Date.now().toString().slice(-6)}`;
     const expectedDate = expectedDateStr ? new Date(expectedDateStr) : null;
 
@@ -360,7 +360,7 @@ export class ErpController {
 
   @Get('purchase-orders')
   async getPurchaseOrders(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.purchaseOrder.findMany({
       include: { supplier: true, items: true },
       orderBy: { createdAt: 'desc' }
@@ -369,7 +369,7 @@ export class ErpController {
 
   @Get('purchase-orders/:id')
   async getPurchaseOrderById(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const po = await db.purchaseOrder.findUnique({
       where: { id },
       include: { supplier: true, items: true }
@@ -380,7 +380,7 @@ export class ErpController {
 
   @Post('purchase-orders/:id/send')
   async sendPurchaseOrder(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const po = await db.purchaseOrder.findUnique({ where: { id } });
     if (!po) throw new NotFoundException('Purchase Order not found');
     if (po.status !== 'DRAFT') throw new BadRequestException('Only DRAFT purchase orders can be sent');
@@ -407,7 +407,7 @@ export class ErpController {
     if (!quantity || typeof quantity !== 'number' || quantity <= 0) {
       throw new BadRequestException('Valid positive quantity is required');
     }
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
 
     const updatedStockItem = await db.$transaction(async (tx: any) => {
       // 1. Upsert StockItem
@@ -520,7 +520,7 @@ export class ErpController {
 
   @Get('acts')
   async getActs(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     return db.serviceAct.findMany({
       include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
@@ -529,7 +529,7 @@ export class ErpController {
 
   @Get('acts/:id')
   async getActById(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const act = await db.serviceAct.findUnique({
       where: { id },
       include: { customer: true, items: true, signature: true, esfDocument: true }
@@ -545,7 +545,7 @@ export class ErpController {
     @Req() req: RequestWithUser
   ) {
     if (!signedXml) throw new BadRequestException('signedXml is required');
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const certDetails = NCALayerService.verifySignature(signedXml);
 
     const act = await db.serviceAct.findUnique({ where: { id } });
@@ -593,7 +593,7 @@ export class ErpController {
 
   @Get('debtors')
   async getDebtors(@Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     
     // Fetch all customers, their invoices, waybills, and service acts
     const customers = await db.customer.findMany({
@@ -636,11 +636,185 @@ export class ErpController {
     });
   }
 
+  // --- Supplier Invoices (AP) ---
+
+  @Post('supplier-invoices')
+  async createSupplierInvoice(
+    @Body('supplierId') supplierId: string,
+    @Body('purchaseOrderId') purchaseOrderId: string | undefined,
+    @Body('amount') amount: number,
+    @Body('dueDate') dueDateStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (!supplierId || typeof supplierId !== 'string') {
+      throw new BadRequestException('supplierId is required');
+    }
+    if (amount === undefined || amount === null || typeof amount !== 'number' || amount <= 0) {
+      throw new BadRequestException('Valid positive amount is required');
+    }
+
+    const db = await this.getDb(req);
+
+    const supplier = await db.supplier.findUnique({ where: { id: supplierId } });
+    if (!supplier) {
+      throw new NotFoundException('Supplier not found');
+    }
+
+    if (purchaseOrderId) {
+      const po = await db.purchaseOrder.findUnique({ where: { id: purchaseOrderId } });
+      if (!po) {
+        throw new NotFoundException('Purchase Order not found');
+      }
+    }
+
+    const invoiceNumber = `SUP-INV-${Date.now().toString().slice(-6)}`;
+    const dueDate = dueDateStr ? new Date(dueDateStr) : null;
+
+    return db.supplierInvoice.create({
+      data: {
+        number: invoiceNumber,
+        supplierId,
+        purchaseOrderId: purchaseOrderId || null,
+        amount,
+        paidAmount: 0.00,
+        status: 'UNPAID',
+        dueDate
+      },
+      include: {
+        supplier: true,
+        purchaseOrder: true,
+        payments: true
+      }
+    });
+  }
+
+  @Get('supplier-invoices')
+  async getSupplierInvoices(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    return db.supplierInvoice.findMany({
+      include: {
+        supplier: true,
+        purchaseOrder: true,
+        payments: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  @Get('supplier-invoices/:id')
+  async getSupplierInvoiceById(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const invoice = await db.supplierInvoice.findUnique({
+      where: { id },
+      include: {
+        supplier: true,
+        purchaseOrder: true,
+        payments: true
+      }
+    });
+    if (!invoice) throw new NotFoundException('Supplier invoice not found');
+    return invoice;
+  }
+
+  @Post('supplier-invoices/:id/pay')
+  async paySupplierInvoice(
+    @Param('id') id: string,
+    @Body('amount') amount: number,
+    @Body('method') method: string | undefined,
+    @Body('referenceId') referenceId: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    if (amount === undefined || amount === null || typeof amount !== 'number' || amount <= 0) {
+      throw new BadRequestException('Valid positive payment amount is required');
+    }
+
+    const db = await this.getDb(req);
+    const invoice = await db.supplierInvoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Supplier invoice not found');
+    if (invoice.status === 'CANCELLED') {
+      throw new BadRequestException('Cannot make payment on a cancelled invoice');
+    }
+
+    const currentPaid = Number(invoice.paidAmount);
+    const totalAmount = Number(invoice.amount);
+    const newPaidAmount = currentPaid + amount;
+
+    // Validation against overpayment (paidAmount cannot exceed invoice amount)
+    if (newPaidAmount > totalAmount + 0.0001) {
+      throw new BadRequestException('Payment amount exceeds remaining invoice balance');
+    }
+
+    let status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' = 'PARTIALLY_PAID';
+    if (newPaidAmount >= totalAmount - 0.0001) {
+      status = 'PAID';
+    } else if (newPaidAmount <= 0) {
+      status = 'UNPAID';
+    }
+
+    return db.$transaction(async (tx: any) => {
+      await tx.supplierPayment.create({
+        data: {
+          supplierInvoiceId: id,
+          amount,
+          method: method || null,
+          referenceId: referenceId || null
+        }
+      });
+
+      return tx.supplierInvoice.update({
+        where: { id },
+        data: {
+          paidAmount: newPaidAmount,
+          status
+        },
+        include: {
+          supplier: true,
+          purchaseOrder: true,
+          payments: true
+        }
+      });
+    });
+  }
+
+  @Get('suppliers/debt')
+  async getSuppliersDebt(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const suppliers = await db.supplier.findMany({
+      include: {
+        supplierInvoices: true
+      }
+    });
+
+    return suppliers.map((s: any) => {
+      let totalBilled = 0;
+      let totalPaid = 0;
+
+      s.supplierInvoices.forEach((inv: any) => {
+        if (inv.status !== 'CANCELLED') {
+          totalBilled += Number(inv.amount);
+          totalPaid += Number(inv.paidAmount);
+        }
+      });
+
+      const debt = totalBilled - totalPaid;
+
+      return {
+        supplierId: s.id,
+        supplierName: s.name,
+        bin: s.bin,
+        totalBilled,
+        totalPaid,
+        debt,
+        invoiceCount: s.supplierInvoices.length
+      };
+    });
+  }
+
   // --- IS ESF Integration Endpoints ---
 
   @Get('esf/:id')
   async getEsfDocument(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const esfDoc = await db.esfDocument.findUnique({
       where: { id },
       include: { invoice: true, waybill: true, act: true }
@@ -651,7 +825,7 @@ export class ErpController {
 
   @Get('invoices/:id/esf')
   async getInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const esfDoc = await db.esfDocument.findUnique({
       where: { invoiceId: id }
     });
@@ -661,7 +835,7 @@ export class ErpController {
 
   @Get('waybills/:id/esf')
   async getWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const esfDoc = await db.esfDocument.findUnique({
       where: { waybillId: id }
     });
@@ -671,7 +845,7 @@ export class ErpController {
 
   @Get('acts/:id/esf')
   async getActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const esfDoc = await db.esfDocument.findUnique({
       where: { actId: id }
     });
@@ -681,7 +855,7 @@ export class ErpController {
 
   @Post('esf/:id/retry')
   async retryEsfSubmission(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     const esfDoc = await db.esfDocument.findUnique({ where: { id } });
     if (!esfDoc) throw new NotFoundException('ESF Document not found');
 
@@ -720,7 +894,7 @@ export class ErpController {
 
   @Post('invoices/:id/esf/retry')
   async retryInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     let esfDoc = await db.esfDocument.findUnique({ where: { invoiceId: id } });
 
     if (!esfDoc) {
@@ -746,7 +920,7 @@ export class ErpController {
 
   @Post('waybills/:id/esf/retry')
   async retryWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     let esfDoc = await db.esfDocument.findUnique({ where: { waybillId: id } });
 
     if (!esfDoc) {
@@ -772,7 +946,7 @@ export class ErpController {
 
   @Post('acts/:id/esf/retry')
   async retryActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
-    const db = this.getDb(req);
+    const db = await this.getDb(req);
     let esfDoc = await db.esfDocument.findUnique({ where: { actId: id } });
 
     if (!esfDoc) {

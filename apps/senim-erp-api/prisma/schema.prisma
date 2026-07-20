@@ -222,19 +222,21 @@ model Supplier {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  purchaseOrders PurchaseOrder[]
+  purchaseOrders   PurchaseOrder[]
+  supplierInvoices SupplierInvoice[]
 }
 
 model PurchaseOrder {
-  id           String              @id @default(uuid())
-  number       String              @unique // e.g. "PO-2026-0001"
-  supplierId   String
-  supplier     Supplier            @relation(fields: [supplierId], references: [id])
-  status       PurchaseOrderStatus @default(DRAFT)
-  expectedDate DateTime?
-  items        PurchaseOrderItem[]
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id               String              @id @default(uuid())
+  number           String              @unique // e.g. "PO-2026-0001"
+  supplierId       String
+  supplier         Supplier            @relation(fields: [supplierId], references: [id])
+  status           PurchaseOrderStatus @default(DRAFT)
+  expectedDate     DateTime?
+  items            PurchaseOrderItem[]
+  supplierInvoices SupplierInvoice[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 }
 
 model PurchaseOrderItem {
@@ -256,4 +258,41 @@ enum PurchaseOrderStatus {
   RECEIVED
   CANCELLED
 }
+
+model SupplierInvoice {
+  id              String                @id @default(uuid())
+  number          String                @unique // "SUP-INV-2026-0001"
+  supplierId      String
+  supplier        Supplier              @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?               // необязательная связь, счёт может быть не привязан к конкретному заказу
+  purchaseOrder   PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id])
+  amount          Decimal               @db.Decimal(15, 2)
+  paidAmount      Decimal               @default(0.00) @db.Decimal(15, 2)
+  status          SupplierInvoiceStatus @default(UNPAID)
+  issueDate       DateTime              @default(now())
+  dueDate         DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  payments SupplierPayment[]
+}
+
+model SupplierPayment {
+  id                String          @id @default(uuid())
+  supplierInvoiceId String
+  supplierInvoice   SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id])
+  amount            Decimal         @db.Decimal(15, 2)
+  paidAt            DateTime        @default(now())
+  method            String?         // banking, cash — свободная строка, как paymentMethod у Invoice в CRM
+  referenceId       String?         // номер платёжки/квитанции
+  createdAt         DateTime        @default(now())
+}
+
+enum SupplierInvoiceStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
 

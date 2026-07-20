@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 @Injectable()
 export class TenantPrismaService implements OnModuleDestroy {
   private clients = new Map<string, PrismaClient>();
+  private ensuredSchemas = new Set<string>();
 
   /**
    * Enforces strict alphanumeric format with dashes and underscores to prevent SQL injection in DDL queries.
@@ -39,12 +40,25 @@ export class TenantPrismaService implements OnModuleDestroy {
   }
 
   /**
+   * High-level method to guarantee tenant schema initialization and return the tenant PrismaClient.
+   */
+  async getTenantClient(tenantId: string): Promise<PrismaClient> {
+    await this.ensureTenantSchema(tenantId);
+    return this.getClient(tenantId);
+  }
+
+  /**
    * Ensures that a tenant's database schema and all associated tables are fully initialized.
    * Runs raw SQL DDL directly against the database to construct isolated tables dynamically.
    */
   async ensureTenantSchema(tenantId: string): Promise<void> {
     this.assertValidTenantId(tenantId);
     const schema = `tenant_${tenantId}`;
+
+    if (this.ensuredSchemas.has(schema)) {
+      return;
+    }
+
     const baseDbUrl = process.env.DATABASE_BASE_URL || 'postgresql://postgres:postgres@localhost:5434/senimerp_dev';
     const baseClient = new PrismaClient({
       datasources: {
@@ -70,6 +84,12 @@ export class TenantPrismaService implements OnModuleDestroy {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'ActStatus' AND n.nspname = '${schema}') THEN
             CREATE TYPE "${schema}"."ActStatus" AS ENUM ('DRAFT', 'ISSUED', 'SIGNED_BY_CUSTOMER', 'CANCELLED');
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'PurchaseOrderStatus' AND n.nspname = '${schema}') THEN
+            CREATE TYPE "${schema}"."PurchaseOrderStatus" AS ENUM ('DRAFT', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED');
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'SupplierInvoiceStatus' AND n.nspname = '${schema}') THEN
+            CREATE TYPE "${schema}"."SupplierInvoiceStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID', 'CANCELLED');
           END IF;
         END$$;
       `);
@@ -198,6 +218,74 @@ export class TenantPrismaService implements OnModuleDestroy {
       `);
 
       await baseClient.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "${schema}"."Supplier" (
+          "id" TEXT PRIMARY KEY,
+          "name" TEXT NOT NULL,
+          "bin" TEXT UNIQUE,
+          "address" TEXT,
+          "email" TEXT,
+          "phone" TEXT,
+          "bankAccount" TEXT,
+          "bankBik" TEXT,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await baseClient.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "${schema}"."PurchaseOrder" (
+          "id" TEXT PRIMARY KEY,
+          "number" TEXT UNIQUE NOT NULL,
+          "supplierId" TEXT NOT NULL REFERENCES "${schema}"."Supplier"("id") ON DELETE CASCADE,
+          "status" TEXT NOT NULL DEFAULT 'DRAFT',
+          "expectedDate" TIMESTAMP,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await baseClient.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "${schema}"."PurchaseOrderItem" (
+          "id" TEXT PRIMARY KEY,
+          "purchaseOrderId" TEXT NOT NULL REFERENCES "${schema}"."PurchaseOrder"("id") ON DELETE CASCADE,
+          "sku" TEXT NOT NULL,
+          "crmProductId" TEXT,
+          "name" TEXT NOT NULL,
+          "quantity" DECIMAL(12, 3) NOT NULL,
+          "receivedQty" DECIMAL(12, 3) NOT NULL DEFAULT 0,
+          "price" DECIMAL(15, 2) NOT NULL
+        );
+      `);
+
+      await baseClient.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "${schema}"."SupplierInvoice" (
+          "id" TEXT PRIMARY KEY,
+          "number" TEXT UNIQUE NOT NULL,
+          "supplierId" TEXT NOT NULL REFERENCES "${schema}"."Supplier"("id") ON DELETE CASCADE,
+          "purchaseOrderId" TEXT REFERENCES "${schema}"."PurchaseOrder"("id") ON DELETE SET NULL,
+          "amount" DECIMAL(15, 2) NOT NULL,
+          "paidAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+          "status" TEXT NOT NULL DEFAULT 'UNPAID',
+          "issueDate" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "dueDate" TIMESTAMP,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await baseClient.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "${schema}"."SupplierPayment" (
+          "id" TEXT PRIMARY KEY,
+          "supplierInvoiceId" TEXT NOT NULL REFERENCES "${schema}"."SupplierInvoice"("id") ON DELETE CASCADE,
+          "amount" DECIMAL(15, 2) NOT NULL,
+          "paidAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "method" TEXT,
+          "referenceId" TEXT,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await baseClient.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS "${schema}"."ProcessedEvent" (
           "id" TEXT PRIMARY KEY,
           "eventType" TEXT NOT NULL,
@@ -206,6 +294,7 @@ export class TenantPrismaService implements OnModuleDestroy {
       `);
 
       console.log(`[Database] Schema ${schema} checked/created successfully.`);
+      this.ensuredSchemas.add(schema);
     } catch (e) {
       console.error(`[Database] Error provisioning schema ${schema}:`, e);
       throw e;
@@ -219,5 +308,6 @@ export class TenantPrismaService implements OnModuleDestroy {
       await client.$disconnect();
     }
     this.clients.clear();
+    this.ensuredSchemas.clear();
   }
 }

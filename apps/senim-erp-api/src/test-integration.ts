@@ -37,6 +37,8 @@ async function runTest() {
   
   await publicClient.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
   
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."SupplierPayment" CASCADE;`);
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."SupplierInvoice" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."PurchaseOrderItem" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."PurchaseOrder" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."Supplier" CASCADE;`);
@@ -72,6 +74,9 @@ async function runTest() {
        IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'PurchaseOrderStatus' AND n.nspname = '${schemaName}') THEN
          CREATE TYPE "${schemaName}"."PurchaseOrderStatus" AS ENUM ('DRAFT', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED');
        END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'SupplierInvoiceStatus' AND n.nspname = '${schemaName}') THEN
+         CREATE TYPE "${schemaName}"."SupplierInvoiceStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID', 'CANCELLED');
+       END IF;
      END$$;`,
     `CREATE TABLE "${schemaName}"."Customer" (id TEXT PRIMARY KEY, "crmId" TEXT UNIQUE, name TEXT NOT NULL, bin TEXT UNIQUE NOT NULL, address TEXT, email TEXT, phone TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."Invoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP NOT NULL, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
@@ -85,6 +90,8 @@ async function runTest() {
     `CREATE TABLE "${schemaName}"."Supplier" (id TEXT PRIMARY KEY, name TEXT NOT NULL, bin TEXT UNIQUE, address TEXT, email TEXT, phone TEXT, "bankAccount" TEXT, "bankBik" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."PurchaseOrder" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, status TEXT DEFAULT 'DRAFT', "expectedDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."PurchaseOrderItem" (id TEXT PRIMARY KEY, "purchaseOrderId" TEXT NOT NULL REFERENCES "${schemaName}"."PurchaseOrder"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, "receivedQty" DECIMAL(12,3) DEFAULT 0 NOT NULL, price DECIMAL(15,2) NOT NULL);`,
+    `CREATE TABLE "${schemaName}"."SupplierInvoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "supplierId" TEXT NOT NULL REFERENCES "${schemaName}"."Supplier"(id) ON DELETE CASCADE, "purchaseOrderId" TEXT REFERENCES "${schemaName}"."PurchaseOrder"(id) ON DELETE SET NULL, amount DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'UNPAID', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."SupplierPayment" (id TEXT PRIMARY KEY, "supplierInvoiceId" TEXT NOT NULL REFERENCES "${schemaName}"."SupplierInvoice"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "paidAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, method TEXT, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
