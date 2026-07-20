@@ -158,6 +158,18 @@ export class TenantPrismaService implements OnModuleDestroy {
             `);
 
             await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."InvoicePayment" (
+                "id" TEXT PRIMARY KEY,
+                "invoiceId" TEXT NOT NULL REFERENCES "${schema}"."Invoice"("id") ON DELETE CASCADE,
+                "amount" DECIMAL(15, 2) NOT NULL,
+                "paidAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "method" TEXT,
+                "referenceId" TEXT,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
               CREATE TABLE IF NOT EXISTS "${schema}"."Waybill" (
                 "id" TEXT PRIMARY KEY,
                 "number" TEXT UNIQUE NOT NULL,

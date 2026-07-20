@@ -42,6 +42,19 @@ model Invoice {
   crmDealId      String?           // Back-link to CRM deal
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
+
+  payments       InvoicePayment[]
+}
+
+model InvoicePayment {
+  id          String   @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(15, 2)
+  paidAt      DateTime @default(now())
+  method      String?
+  referenceId String?
+  createdAt   DateTime @default(now())
 }
 
 model InvoiceLineItem {

@@ -92,26 +92,63 @@ export class ErpController {
   async payInvoice(
     @Param('id') id: string,
     @Body('amount') amountPay: number,
+    @Body('method') method: string | undefined,
+    @Body('referenceId') referenceId: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (!amountPay || amountPay <= 0) throw new BadRequestException('Valid payment amount is required');
+    if (!amountPay || typeof amountPay !== 'number' || amountPay <= 0) {
+      throw new BadRequestException('Valid positive payment amount is required');
+    }
     const db = await this.getDb(req);
 
-    // Atomic increment and status calculation in a single UPDATE — eliminates lost update anomalies
-    const rows = await db.$queryRaw<Array<any>>`
-      UPDATE "Invoice"
-      SET "paidAmount" = "paidAmount" + ${amountPay},
-          "status" = CASE
-            WHEN "paidAmount" + ${amountPay} >= "amount" THEN 'PAID'
-            ELSE 'PARTIALLY_PAID'
-          END,
-          "updatedAt" = now()
-      WHERE id = ${id}
-      RETURNING *;
-    `;
+    let updated: any = null;
 
-    if (rows.length === 0) throw new NotFoundException('Invoice not found');
-    const updated = rows[0];
+    // Atomic transaction: UPDATE with WHERE conditions eliminating overpayment & cancelled statuses, and INSERT into InvoicePayment
+    await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "Invoice"
+        SET "paidAmount" = "paidAmount" + ${amountPay},
+            "status" = CASE
+              WHEN "paidAmount" + ${amountPay} >= "amount" - 0.0001 THEN 'PAID'
+              ELSE 'PARTIALLY_PAID'
+            END,
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" != 'CANCELLED'
+          AND "paidAmount" + ${amountPay} <= "amount" + 0.0001
+        RETURNING *;
+      `;
+
+      if (rows.length === 0) {
+        // Diagnostic SELECT to determine exact error reason for zero rows updated
+        const existing = await tx.invoice.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Invoice not found');
+        }
+        if (existing.status === 'CANCELLED') {
+          throw new BadRequestException('Cannot make payment on a cancelled invoice');
+        }
+        const currentPaid = Number(existing.paidAmount);
+        const totalAmount = Number(existing.amount);
+        if (currentPaid + amountPay > totalAmount + 0.0001) {
+          throw new BadRequestException('Payment amount exceeds remaining invoice balance');
+        }
+        throw new BadRequestException('Invoice payment cannot be processed');
+      }
+
+      updated = rows[0];
+
+      // Insert itemized payment history entry
+      await tx.invoicePayment.create({
+        data: {
+          invoiceId: id,
+          amount: amountPay,
+          method: method || null,
+          referenceId: referenceId || null
+        }
+      });
+    });
+
     const invoiceTotal = Number(updated.amount);
     const nextStatus = updated.status as 'PARTIALLY_PAID' | 'PAID';
 
@@ -127,14 +164,23 @@ export class ErpController {
         amountPaid: amountPay,
         totalAmount: invoiceTotal,
         paymentStatus: nextStatus === 'PAID' ? 'paid' : 'partially_paid',
-        erpDocumentId: id
+        erpDocumentId: id,
+        method: method || undefined,
+        referenceId: referenceId || undefined
       }
     };
 
     await this.publisher.publishEvent(paymentEvent);
     console.log(`[ERP API] Processed payment of ${amountPay} KZT for Invoice ${updated.number}. Status: ${nextStatus}. Fired event.`);
 
-    return updated;
+    return db.invoice.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        items: true,
+        payments: true
+      }
+    });
   }
 
   // --- Waybills ---
@@ -795,29 +841,42 @@ export class ErpController {
     }
 
     const db = await this.getDb(req);
-    const invoice = await db.supplierInvoice.findUnique({ where: { id } });
-    if (!invoice) throw new NotFoundException('Supplier invoice not found');
-    if (invoice.status === 'CANCELLED') {
-      throw new BadRequestException('Cannot make payment on a cancelled invoice');
-    }
 
-    const currentPaid = Number(invoice.paidAmount);
-    const totalAmount = Number(invoice.amount);
-    const newPaidAmount = currentPaid + amount;
+    // Atomic transaction: UPDATE with WHERE conditions eliminating overpayment & cancelled statuses, preventing TOCTOU race conditions
+    await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "SupplierInvoice"
+        SET "paidAmount" = "paidAmount" + ${amount},
+            "status" = CASE
+              WHEN "paidAmount" + ${amount} >= "amount" - 0.0001 THEN 'PAID'
+              WHEN "paidAmount" + ${amount} <= 0.0001 THEN 'UNPAID'
+              ELSE 'PARTIALLY_PAID'
+            END,
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" != 'CANCELLED'
+          AND "paidAmount" + ${amount} <= "amount" + 0.0001
+        RETURNING *;
+      `;
 
-    // Validation against overpayment (paidAmount cannot exceed invoice amount)
-    if (newPaidAmount > totalAmount + 0.0001) {
-      throw new BadRequestException('Payment amount exceeds remaining invoice balance');
-    }
+      if (rows.length === 0) {
+        // Diagnostic SELECT to determine exact error reason for zero rows updated
+        const existing = await tx.supplierInvoice.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Supplier invoice not found');
+        }
+        if (existing.status === 'CANCELLED') {
+          throw new BadRequestException('Cannot make payment on a cancelled invoice');
+        }
+        const currentPaid = Number(existing.paidAmount);
+        const totalAmount = Number(existing.amount);
+        if (currentPaid + amount > totalAmount + 0.0001) {
+          throw new BadRequestException('Payment amount exceeds remaining invoice balance');
+        }
+        throw new BadRequestException('Supplier invoice payment cannot be processed');
+      }
 
-    let status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' = 'PARTIALLY_PAID';
-    if (newPaidAmount >= totalAmount - 0.0001) {
-      status = 'PAID';
-    } else if (newPaidAmount <= 0) {
-      status = 'UNPAID';
-    }
-
-    return db.$transaction(async (tx: any) => {
+      // Record itemized payment history entry
       await tx.supplierPayment.create({
         data: {
           supplierInvoiceId: id,
@@ -826,19 +885,15 @@ export class ErpController {
           referenceId: referenceId || null
         }
       });
+    });
 
-      return tx.supplierInvoice.update({
-        where: { id },
-        data: {
-          paidAmount: newPaidAmount,
-          status
-        },
-        include: {
-          supplier: true,
-          purchaseOrder: true,
-          payments: true
-        }
-      });
+    return db.supplierInvoice.findUnique({
+      where: { id },
+      include: {
+        supplier: true,
+        purchaseOrder: true,
+        payments: true
+      }
     });
   }
 

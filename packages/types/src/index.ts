@@ -82,6 +82,8 @@ export interface InvoicePaidPayload {
   invoiceId: string;
   amountPaid: number;
   totalAmount: number;
+  method?: string;
+  referenceId?: string;
 }
 
 // Stock Level Changed Event Payload (ERP -> CRM)
