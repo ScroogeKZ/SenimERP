@@ -1043,17 +1043,23 @@ export class ErpController {
   @Post('esf/:id/retry')
   async retryEsfSubmission(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
-    const esfDoc = await db.esfDocument.findUnique({ where: { id } });
-    if (!esfDoc) throw new NotFoundException('ESF Document not found');
 
-    const updated = await db.esfDocument.update({
-      where: { id },
-      data: {
-        status: 'PENDING',
-        errorMessage: null
-      }
-    });
+    // Atomic status guard: only allow retry for FAILED, REJECTED, or stuck PENDING documents
+    const rows = await db.$queryRaw<Array<any>>`
+      UPDATE "EsfDocument"
+      SET "status" = 'PENDING', "errorMessage" = NULL, "updatedAt" = now()
+      WHERE "id" = ${id}
+        AND "status" IN ('FAILED', 'REJECTED', 'PENDING')
+      RETURNING *;
+    `;
 
+    if (rows.length === 0) {
+      const existing = await db.esfDocument.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException('ESF Document not found');
+      throw new BadRequestException(`ESF document is already ${existing.status} and cannot be retried`);
+    }
+
+    const esfDoc = rows[0];
     let documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE' = 'WAYBILL';
     let documentId = '';
 
@@ -1076,7 +1082,7 @@ export class ErpController {
     });
 
     console.log(`[ERP API] Manual ESF retry triggered for EsfDocument ${id}`);
-    return updated;
+    return esfDoc;
   }
 
   @Post('invoices/:id/esf/retry')
@@ -1089,15 +1095,23 @@ export class ErpController {
         data: { invoiceId: id, status: 'PENDING' }
       });
     } else {
-      esfDoc = await db.esfDocument.update({
-        where: { id: esfDoc.id },
-        data: { status: 'PENDING', errorMessage: null }
-      });
+      // Atomic status guard: block retry for REGISTERED/SUBMITTED
+      const rows = await db.$queryRaw<Array<any>>`
+        UPDATE "EsfDocument"
+        SET "status" = 'PENDING', "errorMessage" = NULL, "updatedAt" = now()
+        WHERE "id" = ${esfDoc.id}
+          AND "status" IN ('FAILED', 'REJECTED', 'PENDING')
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException(`ESF document is already ${esfDoc.status} and cannot be retried`);
+      }
+      esfDoc = rows[0];
     }
 
     await this.esfQueueService.enqueueSubmission({
       tenantId: req.user.tenantId,
-      esfDocumentId: esfDoc.id,
+      esfDocumentId: esfDoc!.id,
       documentType: 'INVOICE',
       documentId: id
     });
@@ -1115,15 +1129,23 @@ export class ErpController {
         data: { waybillId: id, status: 'PENDING' }
       });
     } else {
-      esfDoc = await db.esfDocument.update({
-        where: { id: esfDoc.id },
-        data: { status: 'PENDING', errorMessage: null }
-      });
+      // Atomic status guard: block retry for REGISTERED/SUBMITTED
+      const rows = await db.$queryRaw<Array<any>>`
+        UPDATE "EsfDocument"
+        SET "status" = 'PENDING', "errorMessage" = NULL, "updatedAt" = now()
+        WHERE "id" = ${esfDoc.id}
+          AND "status" IN ('FAILED', 'REJECTED', 'PENDING')
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException(`ESF document is already ${esfDoc.status} and cannot be retried`);
+      }
+      esfDoc = rows[0];
     }
 
     await this.esfQueueService.enqueueSubmission({
       tenantId: req.user.tenantId,
-      esfDocumentId: esfDoc.id,
+      esfDocumentId: esfDoc!.id,
       documentType: 'WAYBILL',
       documentId: id
     });
@@ -1141,15 +1163,23 @@ export class ErpController {
         data: { actId: id, status: 'PENDING' }
       });
     } else {
-      esfDoc = await db.esfDocument.update({
-        where: { id: esfDoc.id },
-        data: { status: 'PENDING', errorMessage: null }
-      });
+      // Atomic status guard: block retry for REGISTERED/SUBMITTED
+      const rows = await db.$queryRaw<Array<any>>`
+        UPDATE "EsfDocument"
+        SET "status" = 'PENDING', "errorMessage" = NULL, "updatedAt" = now()
+        WHERE "id" = ${esfDoc.id}
+          AND "status" IN ('FAILED', 'REJECTED', 'PENDING')
+        RETURNING *;
+      `;
+      if (rows.length === 0) {
+        throw new BadRequestException(`ESF document is already ${esfDoc.status} and cannot be retried`);
+      }
+      esfDoc = rows[0];
     }
 
     await this.esfQueueService.enqueueSubmission({
       tenantId: req.user.tenantId,
-      esfDocumentId: esfDoc.id,
+      esfDocumentId: esfDoc!.id,
       documentType: 'SERVICE_ACT',
       documentId: id
     });

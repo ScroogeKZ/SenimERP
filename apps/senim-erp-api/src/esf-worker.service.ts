@@ -61,6 +61,16 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // Defense-in-depth: skip if document already registered or actively being submitted
+    if (esfDoc.status === 'REGISTERED') {
+      console.warn(`[EsfWorkerService] EsfDocument ${esfDocumentId} is already REGISTERED (reg: ${esfDoc.esfRegNumber}). Skipping duplicate submission.`);
+      return;
+    }
+    if (esfDoc.status === 'SUBMITTED') {
+      console.warn(`[EsfWorkerService] EsfDocument ${esfDocumentId} is already SUBMITTED. Skipping duplicate submission.`);
+      return;
+    }
+
     try {
       let docData: EsfDocumentData | null = null;
       let existingSignedXml = '';
