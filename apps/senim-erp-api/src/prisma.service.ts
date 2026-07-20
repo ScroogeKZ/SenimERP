@@ -170,6 +170,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "name" TEXT NOT NULL,
                 "quantity" DECIMAL(12, 3) NOT NULL,
                 "price" DECIMAL(15, 2) NOT NULL,
+                "originalPrice" DECIMAL(15, 2),
+                "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -214,6 +217,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "name" TEXT NOT NULL,
                 "quantity" DECIMAL(12, 3) NOT NULL,
                 "price" DECIMAL(15, 2) NOT NULL,
+                "originalPrice" DECIMAL(15, 2),
+                "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -245,6 +251,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "name" TEXT NOT NULL,
                 "quantity" DECIMAL(12, 3) NOT NULL,
                 "price" DECIMAL(15, 2) NOT NULL,
+                "originalPrice" DECIMAL(15, 2),
+                "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "totalAmount" DECIMAL(15, 2) NOT NULL
@@ -494,6 +503,18 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`
               CREATE SEQUENCE IF NOT EXISTS "${schema}"."rma_number_seq" START WITH 1 INCREMENT BY 1;
             `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."WaybillLineItem" ADD COLUMN IF NOT EXISTS "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
           },
           {
             timeout: 30000, // Explicit 30s timeout to allow lock waiting without transaction abortion

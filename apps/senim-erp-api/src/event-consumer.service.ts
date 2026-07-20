@@ -129,6 +129,18 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
       let totalVat = 0;
       let totalAmount = 0;
 
+      // Helper for calculating line item discount metadata
+      const calculateLineDiscount = (listPrice: number | null | undefined, unitPrice: number, quantity: number) => {
+        const originalPrice = listPrice != null ? Number(listPrice) : null;
+        const discountAmount = originalPrice != null ? (originalPrice - unitPrice) * quantity : 0;
+        const discountPercent = originalPrice != null && originalPrice > 0 ? ((originalPrice - unitPrice) / originalPrice) * 100 : 0;
+        return {
+          originalPrice,
+          discountAmount: Number(discountAmount.toFixed(2)),
+          discountPercent: Number(discountPercent.toFixed(2))
+        };
+      };
+
       const invoiceLines = items.map((item: any) => {
         const vatRate = item.vatRate || 12; // Standard Kazakhstani VAT
         const lineTotalExcludingVat = item.quantity * item.price;
@@ -138,12 +150,17 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
         totalVat += lineVat;
         totalAmount += lineTotalIncludingVat;
 
+        const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
+
         return {
           sku: item.sku,
           crmProductId: item.crmProductId,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
+          originalPrice: discountInfo.originalPrice,
+          discountAmount: discountInfo.discountAmount,
+          discountPercent: discountInfo.discountPercent,
           vatRate,
           vatAmount: lineVat,
           totalAmount: lineTotalIncludingVat
@@ -190,12 +207,17 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           waybillVat += vat;
           waybillTotal += totalWithVat;
 
+          const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
+
           return {
             sku: item.sku,
             crmProductId: item.crmProductId,
             name: item.name,
             quantity: item.quantity,
             price: item.price,
+            originalPrice: discountInfo.originalPrice,
+            discountAmount: discountInfo.discountAmount,
+            discountPercent: discountInfo.discountPercent,
             vatRate,
             vatAmount: vat,
             totalAmount: totalWithVat
@@ -261,12 +283,17 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           actVat += vat;
           actTotal += totalWithVat;
 
+          const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
+
           return {
             sku: item.sku,
             crmProductId: item.crmProductId,
             name: item.name,
             quantity: item.quantity,
             price: item.price,
+            originalPrice: discountInfo.originalPrice,
+            discountAmount: discountInfo.discountAmount,
+            discountPercent: discountInfo.discountPercent,
             vatRate,
             vatAmount: vat,
             totalAmount: totalWithVat

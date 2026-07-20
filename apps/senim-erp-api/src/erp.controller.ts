@@ -1535,4 +1535,86 @@ export class ErpController {
     return esfDoc;
   }
 
+  // --- Reports (Discounts) ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('reports/discounts')
+  async getDiscountReport(
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+
+    const customers = await db.customer.findMany();
+
+    const invoices = await db.invoice.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const waybills = await db.waybill.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const acts = await db.serviceAct.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+
+    const discountMap = new Map<string, { customerId: string; customerName: string; bin: string; totalDiscountAmount: number; itemCount: number }>();
+
+    for (const c of customers) {
+      discountMap.set(c.id, {
+        customerId: c.id,
+        customerName: c.name,
+        bin: c.bin,
+        totalDiscountAmount: 0,
+        itemCount: 0
+      });
+    }
+
+    const processItems = (customerId: string, items: Array<any>) => {
+      let entry = discountMap.get(customerId);
+      if (!entry) {
+        entry = { customerId, customerName: 'Unknown', bin: '', totalDiscountAmount: 0, itemCount: 0 };
+        discountMap.set(customerId, entry);
+      }
+      for (const item of items) {
+        const discountAmt = Number(item.discountAmount || 0);
+        entry.totalDiscountAmount += discountAmt;
+        if (discountAmt !== 0) {
+          entry.itemCount += 1;
+        }
+      }
+    };
+
+    for (const inv of invoices) processItems(inv.customerId, inv.items);
+    for (const wb of waybills) processItems(wb.customerId, wb.items);
+    for (const act of acts) processItems(act.customerId, act.items);
+
+    return Array.from(discountMap.values()).map((r) => ({
+      ...r,
+      totalDiscountAmount: Number(r.totalDiscountAmount.toFixed(2))
+    }));
+  }
 }
