@@ -104,6 +104,12 @@ importers:
       '@senimerp/types':
         specifier: workspace:*
         version: link:../../packages/types
+      bullmq:
+        specifier: ^5.8.0
+        version: 5.80.9
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.11.1
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2

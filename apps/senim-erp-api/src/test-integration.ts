@@ -37,7 +37,7 @@ async function runTest() {
   
   await publicClient.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
   
-  // Clear schema if it exists to have a fresh test run
+  await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."EsfDocument" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockMovement" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."StockItem" CASCADE;`);
   await publicClient.$executeRawUnsafe(`DROP TABLE IF EXISTS "${schemaName}"."DocumentSignature" CASCADE;`);
@@ -63,6 +63,9 @@ async function runTest() {
        IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'ActStatus' AND n.nspname = '${schemaName}') THEN
          CREATE TYPE "${schemaName}"."ActStatus" AS ENUM ('DRAFT', 'ISSUED', 'SIGNED_BY_CUSTOMER', 'CANCELLED');
        END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'EsfStatus' AND n.nspname = '${schemaName}') THEN
+         CREATE TYPE "${schemaName}"."EsfStatus" AS ENUM ('PENDING', 'SUBMITTED', 'REGISTERED', 'REJECTED', 'FAILED');
+       END IF;
      END$$;`,
     `CREATE TABLE "${schemaName}"."Customer" (id TEXT PRIMARY KEY, "crmId" TEXT UNIQUE, name TEXT NOT NULL, bin TEXT UNIQUE NOT NULL, address TEXT, email TEXT, phone TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."Invoice" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "paidAmount" DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "dueDate" TIMESTAMP NOT NULL, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
@@ -72,6 +75,7 @@ async function runTest() {
     `CREATE TABLE "${schemaName}"."ServiceAct" (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, "customerId" TEXT NOT NULL REFERENCES "${schemaName}"."Customer"(id) ON DELETE CASCADE, amount DECIMAL(15,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, status TEXT DEFAULT 'DRAFT', "issueDate" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "signedXml" TEXT, "crmDealId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ActLineItem" (id TEXT PRIMARY KEY, "actId" TEXT NOT NULL REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE CASCADE, sku TEXT NOT NULL, "crmProductId" TEXT, name TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, price DECIMAL(15,2) NOT NULL, "vatRate" DECIMAL(5,2) NOT NULL, "vatAmount" DECIMAL(15,2) NOT NULL, "totalAmount" DECIMAL(15,2) NOT NULL);`,
     `CREATE TABLE "${schemaName}"."DocumentSignature" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, "signedBy" TEXT NOT NULL, iin TEXT NOT NULL, "certSerial" TEXT NOT NULL, "signedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+    `CREATE TABLE "${schemaName}"."EsfDocument" (id TEXT PRIMARY KEY, "invoiceId" TEXT UNIQUE REFERENCES "${schemaName}"."Invoice"(id) ON DELETE SET NULL, "waybillId" TEXT UNIQUE REFERENCES "${schemaName}"."Waybill"(id) ON DELETE SET NULL, "actId" TEXT UNIQUE REFERENCES "${schemaName}"."ServiceAct"(id) ON DELETE SET NULL, status TEXT DEFAULT 'PENDING', "esfRegNumber" TEXT, "requestXml" TEXT, "responseXml" TEXT, "errorMessage" TEXT, "submittedAt" TIMESTAMP, "confirmedAt" TIMESTAMP, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."ProcessedEvent" (id TEXT PRIMARY KEY, "eventType" TEXT NOT NULL, "processedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockItem" (id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, "crmProductId" TEXT, quantity DECIMAL(12,3) DEFAULT 0 NOT NULL, reserved DECIMAL(12,3) DEFAULT 0 NOT NULL, "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
     `CREATE TABLE "${schemaName}"."StockMovement" (id TEXT PRIMARY KEY, sku TEXT NOT NULL, quantity DECIMAL(12,3) NOT NULL, type TEXT NOT NULL, "referenceId" TEXT, "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`
@@ -346,6 +350,31 @@ async function runTest() {
     return deal.shipmentStatus === 'delivered' ? deal : null;
   });
   console.log('✓ CRM waybill status update verification verified (fulfillment status: delivered).');
+
+  // 8.5 Test IS ESF Submission Queue & Registration Verification
+  console.log('[Test] Verifying IS ESF submission for signed Waybill...');
+  const esfDoc = await pollUntil(async () => {
+    const res = await fetch(`http://localhost:3004/api/waybills/${waybill.id}/esf`, { headers: apiHeaders });
+    if (!res.ok) return null;
+    const doc = await res.json() as any;
+    return doc.status === 'REGISTERED' ? doc : null;
+  }, { timeoutMs: 15000, intervalMs: 500 });
+
+  if (!esfDoc || !esfDoc.esfRegNumber || !esfDoc.esfRegNumber.startsWith('ESF-')) {
+    throw new Error(`Verification Failed: ESF document status is ${esfDoc?.status}, esfRegNumber: ${esfDoc?.esfRegNumber}`);
+  }
+  console.log(`✓ IS ESF submission verified: Waybill ESF REGISTERED with Reg. № ${esfDoc.esfRegNumber}.`);
+
+  // Test Manual Retry endpoint
+  console.log('[Test] Testing ESF manual retry endpoint...');
+  const retryRes = await fetch(`http://localhost:3004/api/waybills/${waybill.id}/esf/retry`, {
+    method: 'POST',
+    headers: apiHeaders
+  });
+  if (!retryRes.ok) {
+    throw new Error(`Verification Failed: ESF retry endpoint returned status ${retryRes.status}`);
+  }
+  console.log('✓ ESF manual retry endpoint verified.');
 
   // 9. Test Edge Case: Signing a waybill with an unstocked item
   console.log('[Test] Testing edge case: waybill for unstocked item...');

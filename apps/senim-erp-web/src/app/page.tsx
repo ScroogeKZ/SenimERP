@@ -229,6 +229,50 @@ export default function ErpDashboard() {
     }
   };
 
+  const getEsfBadgeClass = (status?: string) => {
+    switch (status) {
+      case 'REGISTERED': return 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+      case 'SUBMITTED': return 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
+      case 'PENDING': return 'bg-blue-500/20 text-blue-300 border border-blue-500/30';
+      case 'REJECTED': return 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
+      case 'FAILED': return 'bg-red-500/20 text-red-300 border border-red-500/30';
+      default: return 'bg-slate-800 text-slate-400';
+    }
+  };
+
+  const getEsfLabel = (status?: string) => {
+    switch (status) {
+      case 'REGISTERED': return 'ЭСФ: Зарегистрирован';
+      case 'SUBMITTED': return 'ЭСФ: Отправлен';
+      case 'PENDING': return 'ЭСФ: В очереди';
+      case 'REJECTED': return 'ЭСФ: Отклонен';
+      case 'FAILED': return 'ЭСФ: Ошибка';
+      default: return 'ЭСФ: Не выписан';
+    }
+  };
+
+  const retryEsf = async (docType: 'invoice' | 'waybill' | 'act', id: string) => {
+    try {
+      const headers = {
+        'Authorization': `Bearer ${ssoToken}`,
+        'Content-Type': 'application/json'
+      };
+      const res = await fetch(`http://localhost:3004/api/${docType}s/${id}/esf/retry`, {
+        method: 'POST',
+        headers
+      });
+      if (res.ok) {
+        triggerAlert('success', 'Повторная отправка ЭСФ поставлена в очередь!');
+        fetchData();
+      } else {
+        const err = await res.json();
+        triggerAlert('error', `Ошибка повтора ЭСФ: ${err.message}`);
+      }
+    } catch (e) {
+      triggerAlert('error', `Ошибка сети при повторе ЭСФ: ${(e as Error).message}`);
+    }
+  };
+
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen space-y-4">
@@ -363,11 +407,16 @@ export default function ErpDashboard() {
                           <p className="font-bold text-slate-100">{inv.number}</p>
                           <p className="text-xs text-slate-400">{inv.customer.name}</p>
                         </div>
-                        <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-2">
                           <div className="text-right">
                             <p className="font-bold text-slate-100">{Number(inv.amount).toLocaleString()} ₸</p>
                             <p className="text-[10px] text-slate-400">Оплачено: {Number(inv.paidAmount).toLocaleString()} ₸</p>
                           </div>
+                          {inv.esfDocument && (
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getEsfBadgeClass(inv.esfDocument.status)}`}>
+                              {getEsfLabel(inv.esfDocument.status)}
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getStatusBadgeClass(inv.status)}`}>
                             {getStatusLabel(inv.status)}
                           </span>
@@ -399,8 +448,13 @@ export default function ErpDashboard() {
                           <p className="font-bold text-slate-100">{wb.number}</p>
                           <p className="text-xs text-slate-400">{wb.customer.name}</p>
                         </div>
-                        <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-2">
                           <p className="font-bold text-slate-100">{Number(wb.amount).toLocaleString()} ₸</p>
+                          {wb.esfDocument && (
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getEsfBadgeClass(wb.esfDocument.status)}`}>
+                              {getEsfLabel(wb.esfDocument.status)}
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getStatusBadgeClass(wb.status)}`}>
                             {wb.status === 'DRAFT' ? 'Черновик' : 'Проведена'}
                           </span>
@@ -432,8 +486,13 @@ export default function ErpDashboard() {
                           <p className="font-bold text-slate-100">{act.number}</p>
                           <p className="text-xs text-slate-400">{act.customer.name}</p>
                         </div>
-                        <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-2">
                           <p className="font-bold text-slate-100">{Number(act.amount).toLocaleString()} ₸</p>
+                          {act.esfDocument && (
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getEsfBadgeClass(act.esfDocument.status)}`}>
+                              {getEsfLabel(act.esfDocument.status)}
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getStatusBadgeClass(act.status)}`}>
                             {act.status === 'DRAFT' ? 'Черновик' : 'Подписан'}
                           </span>
@@ -606,6 +665,35 @@ export default function ErpDashboard() {
                   </div>
                 </div>
 
+                {selectedWaybill.esfDocument && (
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-slate-300">Статус ИС ЭСФ:</span>
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getEsfBadgeClass(selectedWaybill.esfDocument.status)}`}>
+                        {getEsfLabel(selectedWaybill.esfDocument.status)}
+                      </span>
+                    </div>
+                    {selectedWaybill.esfDocument.esfRegNumber && (
+                      <p className="text-[11px] text-emerald-400 font-mono">
+                        Рег. №: {selectedWaybill.esfDocument.esfRegNumber}
+                      </p>
+                    )}
+                    {selectedWaybill.esfDocument.errorMessage && (
+                      <p className="text-[11px] text-rose-400">
+                        Ошибка: {selectedWaybill.esfDocument.errorMessage}
+                      </p>
+                    )}
+                    {(selectedWaybill.esfDocument.status === 'FAILED' || selectedWaybill.esfDocument.status === 'REJECTED') && (
+                      <button 
+                        onClick={() => retryEsf('waybill', selectedWaybill.id)}
+                        className="w-full py-2 mt-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs"
+                      >
+                        Повторить подачу ЭСФ
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {selectedWaybill.status === 'DRAFT' && (
                   <button 
                     onClick={() => signDocument('waybill', selectedWaybill.id, selectedWaybill.number)}
@@ -647,6 +735,35 @@ export default function ErpDashboard() {
                     ))}
                   </div>
                 </div>
+
+                {selectedAct.esfDocument && (
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-slate-300">Статус ИС ЭСФ:</span>
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${getEsfBadgeClass(selectedAct.esfDocument.status)}`}>
+                        {getEsfLabel(selectedAct.esfDocument.status)}
+                      </span>
+                    </div>
+                    {selectedAct.esfDocument.esfRegNumber && (
+                      <p className="text-[11px] text-emerald-400 font-mono">
+                        Рег. №: {selectedAct.esfDocument.esfRegNumber}
+                      </p>
+                    )}
+                    {selectedAct.esfDocument.errorMessage && (
+                      <p className="text-[11px] text-rose-400">
+                        Ошибка: {selectedAct.esfDocument.errorMessage}
+                      </p>
+                    )}
+                    {(selectedAct.esfDocument.status === 'FAILED' || selectedAct.esfDocument.status === 'REJECTED') && (
+                      <button 
+                        onClick={() => retryEsf('act', selectedAct.id)}
+                        className="w-full py-2 mt-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs"
+                      >
+                        Повторить подачу ЭСФ
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {selectedAct.status === 'DRAFT' && (
                   <button 

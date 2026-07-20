@@ -18,6 +18,8 @@
     "@senimerp/event-bus-client": "workspace:*",
     "@senimerp/integrations": "workspace:*",
     "@senimerp/types": "workspace:*",
+    "bullmq": "^5.8.0",
+    "ioredis": "^5.4.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

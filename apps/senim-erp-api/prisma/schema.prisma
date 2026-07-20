@@ -38,6 +38,7 @@ model Invoice {
   items          InvoiceLineItem[]
   signedXml      String?           @db.Text // Signed XML storage
   signature      DocumentSignature?
+  esfDocument    EsfDocument?
   crmDealId      String?           // Back-link to CRM deal
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
@@ -78,6 +79,7 @@ model Waybill {
   items          WaybillLineItem[]
   signedXml      String?           @db.Text
   signature      DocumentSignature?
+  esfDocument    EsfDocument?
   crmDealId      String?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
@@ -116,6 +118,7 @@ model ServiceAct {
   items          ActLineItem[]
   signedXml      String?           @db.Text
   signature      DocumentSignature?
+  esfDocument    EsfDocument?
   crmDealId      String?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
@@ -140,6 +143,33 @@ enum ActStatus {
   ISSUED
   SIGNED_BY_CUSTOMER
   CANCELLED
+}
+
+model EsfDocument {
+  id            String       @id @default(uuid())
+  invoiceId     String?      @unique
+  invoice       Invoice?     @relation(fields: [invoiceId], references: [id])
+  waybillId     String?      @unique
+  waybill       Waybill?     @relation(fields: [waybillId], references: [id])
+  actId         String?      @unique
+  act           ServiceAct?  @relation(fields: [actId], references: [id])
+  status        EsfStatus    @default(PENDING)
+  esfRegNumber  String?      // регистрационный номер ЭСФ в ИС ЭСФ (после успешной подачи)
+  requestXml    String?      @db.Text   // сформированный и подписанный XML, отправленный в ИС ЭСФ
+  responseXml   String?      @db.Text   // сырой ответ системы — для разбора ошибок вручную
+  errorMessage  String?
+  submittedAt   DateTime?
+  confirmedAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+enum EsfStatus {
+  PENDING       // сформирован, ещё не отправлен
+  SUBMITTED     // отправлен в ИС ЭСФ, ждём подтверждения
+  REGISTERED    // зарегистрирован, получен esfRegNumber — юридически значим
+  REJECTED      // отклонён ИС ЭСФ (ошибка валидации, невалидный БИН контрагента и т.п.)
+  FAILED        // техническая ошибка при отправке (таймаут, недоступность сервиса) — подлежит повтору
 }
 
 model DocumentSignature {

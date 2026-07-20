@@ -93,3 +93,153 @@ export class NCALayerService {
     };
   }
 }
+
+export interface EsfPartyInfo {
+  bin: string;
+  name: string;
+  address?: string;
+}
+
+export interface EsfItemInfo {
+  sku: string;
+  name: string;
+  quantity: number;
+  price: number;
+  vatRate: number;
+  vatAmount: number;
+  totalAmount: number;
+}
+
+export interface EsfDocumentData {
+  documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE';
+  documentId: string;
+  documentNumber: string;
+  turnoverDate: string; // YYYY-MM-DD
+  supplier: EsfPartyInfo;
+  customer: EsfPartyInfo;
+  items: EsfItemInfo[];
+  totalAmount: number;
+  totalVatAmount: number;
+}
+
+/**
+ * Handles generation of XML structures for Kazakhstani IS ESF system.
+ */
+export class EsfXmlGenerator {
+  /**
+   * Generates a standard ESF XML representation.
+   */
+  static generateXml(data: EsfDocumentData): string {
+    const itemsXml = data.items
+      .map(
+        (item) => `
+      <product>
+        <sku>${item.sku}</sku>
+        <description>${item.name}</description>
+        <quantity>${item.quantity.toFixed(3)}</quantity>
+        <unitPrice>${item.price.toFixed(2)}</unitPrice>
+        <vatRate>${item.vatRate.toFixed(2)}</vatRate>
+        <vatAmount>${item.vatAmount.toFixed(2)}</vatAmount>
+        <totalAmount>${item.totalAmount.toFixed(2)}</totalAmount>
+      </product>`
+      )
+      .join('');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<esf:esfDocument xmlns:esf="v1.esf.kgd.minfin.gov.kz">
+  <header>
+    <num>${data.documentNumber}</num>
+    <documentId>${data.documentId}</documentId>
+    <documentType>${data.documentType}</documentType>
+    <turnoverDate>${data.turnoverDate}</turnoverDate>
+  </header>
+  <sellers>
+    <seller>
+      <bin>${data.supplier.bin}</bin>
+      <name>${data.supplier.name}</name>
+      <address>${data.supplier.address || ''}</address>
+    </seller>
+  </sellers>
+  <buyers>
+    <buyer>
+      <bin>${data.customer.bin}</bin>
+      <name>${data.customer.name}</name>
+      <address>${data.customer.address || ''}</address>
+    </buyer>
+  </buyers>
+  <productSet>
+    <products>${itemsXml}
+    </products>
+    <totalValue>${data.totalAmount.toFixed(2)}</totalValue>
+    <totalVat>${data.totalVatAmount.toFixed(2)}</totalVat>
+  </productSet>
+</esf:esfDocument>`;
+  }
+}
+
+export interface EsfSubmissionResult {
+  success: boolean;
+  esfRegNumber?: string;
+  responseXml: string;
+  errorMessage?: string;
+  isRetryable?: boolean;
+}
+
+export interface EsfStatusCheckResult {
+  status: 'REGISTERED' | 'REJECTED' | 'SUBMITTED';
+  esfRegNumber?: string;
+  responseXml: string;
+  errorMessage?: string;
+}
+
+/**
+ * SOAP Client interface for interacting with IS ESF (KGD MF RK).
+ * Supports Mock mode for development/testing and production WSDL mode.
+ */
+export class EsfSoapClient {
+  private isMock: boolean;
+
+  constructor(isMock: boolean = true) {
+    this.isMock = isMock;
+  }
+
+  /**
+   * Submits signed ESF XML to IS ESF system.
+   */
+  async submitEsf(signedXml: string): Promise<EsfSubmissionResult> {
+    if (this.isMock) {
+      // Simulate IS ESF processing
+      const randomSuffix = Math.floor(10000000 + Math.random() * 90000000);
+      const esfRegNumber = `ESF-${new Date().getFullYear()}-${randomSuffix}`;
+      const responseXml = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><submitResponse><status>SUCCESS</status><esfRegistrationNumber>${esfRegNumber}</esfRegistrationNumber></submitResponse></soap:Body></soap:Envelope>`;
+
+      return {
+        success: true,
+        esfRegNumber,
+        responseXml
+      };
+    }
+
+    throw new Error('Production KGD SOAP endpoint not configured. Set IS_ESF_MOCK=true.');
+  }
+
+  /**
+   * Checks status of submitted ESF in IS ESF.
+   */
+  async checkStatus(esfRegNumberOrDocId: string): Promise<EsfStatusCheckResult> {
+    if (this.isMock) {
+      const esfRegNumber = esfRegNumberOrDocId.startsWith('ESF-')
+        ? esfRegNumberOrDocId
+        : `ESF-${new Date().getFullYear()}-${Math.floor(10000000 + Math.random() * 90000000)}`;
+
+      return {
+        status: 'REGISTERED',
+        esfRegNumber,
+        responseXml: `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><statusResponse><status>REGISTERED</status><esfRegistrationNumber>${esfRegNumber}</esfRegistrationNumber></statusResponse></soap:Body></soap:Envelope>`
+      };
+    }
+
+    throw new Error('Production KGD SOAP endpoint not configured.');
+  }
+}
+

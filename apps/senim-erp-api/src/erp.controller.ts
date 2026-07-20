@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Param, UseGuards, Req, NotFoundException, BadRequestException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { TenantPrismaService } from './prisma.service.js';
+import { EsfQueueService } from './esf-queue.service.js';
 import { NCALayerService } from '@senimerp/integrations';
 import { EventBusPublisher } from '@senimerp/event-bus-client';
 import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
@@ -11,7 +12,10 @@ import crypto from 'crypto';
 export class ErpController {
   private publisher = new EventBusPublisher();
 
-  constructor(private readonly prismaService: TenantPrismaService) {}
+  constructor(
+    private readonly prismaService: TenantPrismaService,
+    private readonly esfQueueService: EsfQueueService
+  ) {}
 
   /**
    * Helper to get database client for request tenant.
@@ -27,7 +31,7 @@ export class ErpController {
   async getInvoices(@Req() req: RequestWithUser) {
     const db = this.getDb(req);
     return db.invoice.findMany({
-      include: { customer: true },
+      include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
     });
   }
@@ -37,7 +41,7 @@ export class ErpController {
     const db = this.getDb(req);
     const invoice = await db.invoice.findUnique({
       where: { id },
-      include: { customer: true, items: true, signature: true }
+      include: { customer: true, items: true, signature: true, esfDocument: true }
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
     return invoice;
@@ -139,7 +143,7 @@ export class ErpController {
   async getWaybills(@Req() req: RequestWithUser) {
     const db = this.getDb(req);
     return db.waybill.findMany({
-      include: { customer: true },
+      include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
     });
   }
@@ -149,7 +153,7 @@ export class ErpController {
     const db = this.getDb(req);
     const waybill = await db.waybill.findUnique({
       where: { id },
-      include: { customer: true, items: true, signature: true }
+      include: { customer: true, items: true, signature: true, esfDocument: true }
     });
     if (!waybill) throw new NotFoundException('Waybill not found');
     return waybill;
@@ -265,6 +269,20 @@ export class ErpController {
 
     console.log(`[ERP API] Waybill ${waybill.number} signed. Fired shipment.completed and stock.level_changed events.`);
 
+    // Create EsfDocument and enqueue ESF submission for physical turnover
+    const esfDoc = await db.esfDocument.upsert({
+      where: { waybillId: id },
+      create: { waybillId: id, status: 'PENDING' },
+      update: { status: 'PENDING', errorMessage: null }
+    });
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'WAYBILL',
+      documentId: id
+    });
+
     return updated;
   }
 
@@ -333,7 +351,7 @@ export class ErpController {
   async getActs(@Req() req: RequestWithUser) {
     const db = this.getDb(req);
     return db.serviceAct.findMany({
-      include: { customer: true },
+      include: { customer: true, esfDocument: true },
       orderBy: { createdAt: 'desc' }
     });
   }
@@ -343,7 +361,7 @@ export class ErpController {
     const db = this.getDb(req);
     const act = await db.serviceAct.findUnique({
       where: { id },
-      include: { customer: true, items: true, signature: true }
+      include: { customer: true, items: true, signature: true, esfDocument: true }
     });
     if (!act) throw new NotFoundException('Act of work not found');
     return act;
@@ -382,6 +400,21 @@ export class ErpController {
     });
 
     console.log(`[ERP API] Service Act ${act.number} signed.`);
+
+    // Create EsfDocument and enqueue ESF submission for service turnover
+    const esfDoc = await db.esfDocument.upsert({
+      where: { actId: id },
+      create: { actId: id, status: 'PENDING' },
+      update: { status: 'PENDING', errorMessage: null }
+    });
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'SERVICE_ACT',
+      documentId: id
+    });
+
     return updated;
   }
 
@@ -431,4 +464,165 @@ export class ErpController {
       };
     });
   }
+
+  // --- IS ESF Integration Endpoints ---
+
+  @Get('esf/:id')
+  async getEsfDocument(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const esfDoc = await db.esfDocument.findUnique({
+      where: { id },
+      include: { invoice: true, waybill: true, act: true }
+    });
+    if (!esfDoc) throw new NotFoundException('ESF Document not found');
+    return esfDoc;
+  }
+
+  @Get('invoices/:id/esf')
+  async getInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const esfDoc = await db.esfDocument.findUnique({
+      where: { invoiceId: id }
+    });
+    if (!esfDoc) throw new NotFoundException('ESF Document not found for this invoice');
+    return esfDoc;
+  }
+
+  @Get('waybills/:id/esf')
+  async getWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const esfDoc = await db.esfDocument.findUnique({
+      where: { waybillId: id }
+    });
+    if (!esfDoc) throw new NotFoundException('ESF Document not found for this waybill');
+    return esfDoc;
+  }
+
+  @Get('acts/:id/esf')
+  async getActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const esfDoc = await db.esfDocument.findUnique({
+      where: { actId: id }
+    });
+    if (!esfDoc) throw new NotFoundException('ESF Document not found for this service act');
+    return esfDoc;
+  }
+
+  @Post('esf/:id/retry')
+  async retryEsfSubmission(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    const esfDoc = await db.esfDocument.findUnique({ where: { id } });
+    if (!esfDoc) throw new NotFoundException('ESF Document not found');
+
+    const updated = await db.esfDocument.update({
+      where: { id },
+      data: {
+        status: 'PENDING',
+        errorMessage: null
+      }
+    });
+
+    let documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE' = 'WAYBILL';
+    let documentId = '';
+
+    if (esfDoc.waybillId) {
+      documentType = 'WAYBILL';
+      documentId = esfDoc.waybillId;
+    } else if (esfDoc.actId) {
+      documentType = 'SERVICE_ACT';
+      documentId = esfDoc.actId;
+    } else if (esfDoc.invoiceId) {
+      documentType = 'INVOICE';
+      documentId = esfDoc.invoiceId;
+    }
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType,
+      documentId
+    });
+
+    console.log(`[ERP API] Manual ESF retry triggered for EsfDocument ${id}`);
+    return updated;
+  }
+
+  @Post('invoices/:id/esf/retry')
+  async retryInvoiceEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    let esfDoc = await db.esfDocument.findUnique({ where: { invoiceId: id } });
+
+    if (!esfDoc) {
+      esfDoc = await db.esfDocument.create({
+        data: { invoiceId: id, status: 'PENDING' }
+      });
+    } else {
+      esfDoc = await db.esfDocument.update({
+        where: { id: esfDoc.id },
+        data: { status: 'PENDING', errorMessage: null }
+      });
+    }
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'INVOICE',
+      documentId: id
+    });
+
+    return esfDoc;
+  }
+
+  @Post('waybills/:id/esf/retry')
+  async retryWaybillEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    let esfDoc = await db.esfDocument.findUnique({ where: { waybillId: id } });
+
+    if (!esfDoc) {
+      esfDoc = await db.esfDocument.create({
+        data: { waybillId: id, status: 'PENDING' }
+      });
+    } else {
+      esfDoc = await db.esfDocument.update({
+        where: { id: esfDoc.id },
+        data: { status: 'PENDING', errorMessage: null }
+      });
+    }
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'WAYBILL',
+      documentId: id
+    });
+
+    return esfDoc;
+  }
+
+  @Post('acts/:id/esf/retry')
+  async retryActEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = this.getDb(req);
+    let esfDoc = await db.esfDocument.findUnique({ where: { actId: id } });
+
+    if (!esfDoc) {
+      esfDoc = await db.esfDocument.create({
+        data: { actId: id, status: 'PENDING' }
+      });
+    } else {
+      esfDoc = await db.esfDocument.update({
+        where: { id: esfDoc.id },
+        data: { status: 'PENDING', errorMessage: null }
+      });
+    }
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'SERVICE_ACT',
+      documentId: id
+    });
+
+    return esfDoc;
+  }
+
 }
