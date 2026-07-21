@@ -606,8 +606,15 @@ export class ErpController {
       let cnAmount = 0;
       let cnVatAmount = 0;
       for (const line of rma.lines) {
-        cnAmount += Number(line.totalAmount || 0);
-        cnVatAmount += Number(line.vatAmount || 0);
+        const wbItem = rma.waybill?.items?.find((wi: any) => wi.sku === line.sku);
+        const price = line.price != null ? Number(line.price) : Number(wbItem?.price || 0);
+        const vatRate = line.vatRate != null ? Number(line.vatRate) : Number(wbItem?.vatRate || 0);
+        const qty = Number(line.quantity);
+        const lineVat = line.vatAmount != null ? Number(line.vatAmount) : Number((price * qty * (vatRate / 100)).toFixed(2));
+        const lineTotal = line.totalAmount != null ? Number(line.totalAmount) : Number((price * qty + lineVat).toFixed(2));
+
+        cnAmount += lineTotal;
+        cnVatAmount += lineVat;
       }
       cnAmount = Number(cnAmount.toFixed(2));
       cnVatAmount = Number(cnVatAmount.toFixed(2));
@@ -630,15 +637,21 @@ export class ErpController {
           items: {
             create: rma.lines.map((line: any) => {
               const wbItem = rma.waybill?.items?.find((wi: any) => wi.sku === line.sku);
+              const price = line.price != null ? Number(line.price) : Number(wbItem?.price || 0);
+              const vatRate = line.vatRate != null ? Number(line.vatRate) : Number(wbItem?.vatRate || 0);
+              const qty = Number(line.quantity);
+              const lineVat = line.vatAmount != null ? Number(line.vatAmount) : Number((price * qty * (vatRate / 100)).toFixed(2));
+              const lineTotal = line.totalAmount != null ? Number(line.totalAmount) : Number((price * qty + lineVat).toFixed(2));
+
               return {
                 sku: line.sku,
                 crmProductId: wbItem?.crmProductId || null,
                 name: wbItem?.name || line.sku,
-                quantity: Number(line.quantity),
-                price: Number(line.price),
-                vatRate: Number(line.vatRate),
-                vatAmount: Number(line.vatAmount),
-                totalAmount: Number(line.totalAmount)
+                quantity: qty,
+                price,
+                vatRate,
+                vatAmount: lineVat,
+                totalAmount: lineTotal
               };
             })
           }

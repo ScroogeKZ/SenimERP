@@ -509,10 +509,10 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "sku" TEXT NOT NULL,
                 "warehouseId" TEXT NOT NULL REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE,
                 "quantity" DECIMAL(12, 3) NOT NULL,
-                "price" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
-                "vatRate" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
-                "vatAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
-                "totalAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00
+                "price" DECIMAL(15, 2),
+                "vatRate" DECIMAL(5, 2),
+                "vatAmount" DECIMAL(15, 2),
+                "totalAmount" DECIMAL(15, 2)
               );
             `);
 
@@ -556,10 +556,10 @@ export class TenantPrismaService implements OnModuleDestroy {
               );
             `);
 
-            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "price" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
-            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatRate" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
-            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
-            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "totalAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "price" DECIMAL(15, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatRate" DECIMAL(5, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatAmount" DECIMAL(15, 2);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "totalAmount" DECIMAL(15, 2);`);
 
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."DocumentSignature" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."EsfDocument" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
