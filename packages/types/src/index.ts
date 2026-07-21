@@ -116,3 +116,15 @@ export interface CreditNoteIssuedPayload {
   invoiceId?: string;
 }
 
+// Refund Confirmed Event Payload (CRM -> ERP)
+export interface RefundConfirmedPayload {
+  dealId: string;
+  creditNoteId: string;
+  creditNoteNumber: string;
+  amount: number;
+  provider: 'kaspi' | 'halyk' | 'bank_transfer' | 'cash';
+  referenceId: string;
+  confirmedAt: string;
+}
+
+

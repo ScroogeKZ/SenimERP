@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import { PrismaClient } from '@prisma/client';
@@ -13,7 +13,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
   private soapClient = new EsfSoapClient(); // Default to environment-driven SOAP client
   private pollingTimer?: NodeJS.Timeout;
 
-  constructor(private readonly prismaService: TenantPrismaService) {}
+  constructor(@Inject(TenantPrismaService) private readonly prismaService: TenantPrismaService) {}
 
   onModuleInit() {
     this.worker = new Worker(

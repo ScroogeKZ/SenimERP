@@ -556,11 +556,22 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
                 "status" "${schema}"."CreditNoteStatus" NOT NULL DEFAULT 'DRAFT',
                 "issueDate" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "refundStatus" TEXT DEFAULT 'pending',
+                "refundedAmount" DECIMAL(15, 2) DEFAULT 0.00,
+                "refundProvider" TEXT,
+                "refundReferenceId" TEXT,
+                "refundedAt" TIMESTAMP,
                 "signedXml" TEXT,
                 "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
               );
             `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ADD COLUMN IF NOT EXISTS "refundStatus" TEXT DEFAULT 'pending';`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ADD COLUMN IF NOT EXISTS "refundedAmount" DECIMAL(15, 2) DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ADD COLUMN IF NOT EXISTS "refundProvider" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ADD COLUMN IF NOT EXISTS "refundReferenceId" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ADD COLUMN IF NOT EXISTS "refundedAt" TIMESTAMP;`);
 
             await tx.$executeRawUnsafe(`
               CREATE TABLE IF NOT EXISTS "${schema}"."CreditNoteLineItem" (

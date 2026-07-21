@@ -1,13 +1,13 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
 import { EventBusSubscriber, redisConnection } from '@senimerp/event-bus-client';
-import { DealWonPayload, ClientSyncedPayload, IntegrationEvent } from '@senimerp/types';
+import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
 
 @Injectable()
 export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
   private subscriber!: EventBusSubscriber;
 
-  constructor(private readonly prismaService: TenantPrismaService) {}
+  constructor(@Inject(TenantPrismaService) private readonly prismaService: TenantPrismaService) {}
 
   onModuleInit() {
     // Start Event Bus subscriber mapping handlers
@@ -16,7 +16,8 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
       'client.created': this.handleClientSynced.bind(this),
       'client.updated': this.handleClientSynced.bind(this),
       'marketplace.order.received': this.handleMarketplaceOrderReceived.bind(this),
-      'marketplace.order.cancelled': this.handleMarketplaceOrderCancelled.bind(this)
+      'marketplace.order.cancelled': this.handleMarketplaceOrderCancelled.bind(this),
+      'refund.confirmed': this.handleRefundConfirmed.bind(this)
     });
     console.log('[EventConsumer] BullMQ subscriber started for Integration Bus');
   }
@@ -626,6 +627,56 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           console.log(`[EventConsumer] DELIVERED Waybill ${waybill.number} cancelled via confirmed RMA ${rma.number}, inventory restored.`);
         }
       });
+    } catch (e: any) {
+      if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
+        console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Processes a refund confirmed event (CRM -> ERP).
+   */
+  async handleRefundConfirmed(event: IntegrationEvent<RefundConfirmedPayload>) {
+    const { tenantId, eventId } = event;
+    const { creditNoteId, amount, provider, referenceId, confirmedAt } = event.payload;
+
+    console.log(`[EventConsumer] Processing refund confirmed event: ${eventId} (Tenant: ${tenantId})`);
+
+    await this.prismaService.ensureTenantSchema(tenantId);
+    const db = this.prismaService.getClient(tenantId);
+
+    try {
+      await db.$transaction(async (tx: any) => {
+        await tx.processedEvent.create({
+          data: { id: eventId, eventType: event.eventType }
+        });
+
+        const cn = await tx.creditNote.findUnique({ where: { id: creditNoteId } });
+        if (!cn) {
+          console.warn(`[EventConsumer] CreditNote ${creditNoteId} not found, skipping refund sync`);
+          return;
+        }
+
+        const priorRefunded = Number(cn.refundedAmount || 0);
+        const newRefunded = priorRefunded + amount;
+        const totalDue = Number(cn.amount);
+
+        await tx.creditNote.update({
+          where: { id: creditNoteId },
+          data: {
+            refundedAmount: newRefunded,
+            refundStatus: newRefunded >= totalDue ? 'refunded' : 'pending',
+            refundProvider: provider,
+            refundReferenceId: referenceId,
+            refundedAt: new Date(confirmedAt)
+          }
+        });
+      });
+
+      console.log(`[EventConsumer] CreditNote ${creditNoteId} refund recorded: ${amount} via ${provider}.`);
     } catch (e: any) {
       if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
         console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);

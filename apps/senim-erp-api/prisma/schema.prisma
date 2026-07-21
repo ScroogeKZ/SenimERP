@@ -410,9 +410,14 @@ model CreditNote {
   customer    Customer            @relation(fields: [customerId], references: [id])
   amount      Decimal             @db.Decimal(15, 2)
   vatAmount   Decimal             @db.Decimal(15, 2)
-  status      CreditNoteStatus    @default(DRAFT)
-  issueDate   DateTime            @default(now())
-  items       CreditNoteLineItem[]
+  status            CreditNoteStatus    @default(DRAFT)
+  issueDate         DateTime            @default(now())
+  refundStatus      String?             @default("pending")
+  refundedAmount    Decimal?            @default(0.00) @db.Decimal(15, 2)
+  refundProvider    String?
+  refundReferenceId String?
+  refundedAt        DateTime?
+  items             CreditNoteLineItem[]
   signedXml   String?             @db.Text
   signature   DocumentSignature?
   esfDocument EsfDocument?
