@@ -14,7 +14,9 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     this.subscriber = new EventBusSubscriber(undefined, {
       'deal.won': this.handleDealWon.bind(this),
       'client.created': this.handleClientSynced.bind(this),
-      'client.updated': this.handleClientSynced.bind(this)
+      'client.updated': this.handleClientSynced.bind(this),
+      'marketplace.order.received': this.handleMarketplaceOrderReceived.bind(this),
+      'marketplace.order.cancelled': this.handleMarketplaceOrderCancelled.bind(this)
     });
     console.log('[EventConsumer] BullMQ subscriber started for Integration Bus');
   }
@@ -334,6 +336,286 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     });
 
     console.log(`[EventConsumer] Event deal.won processed successfully. Database transaction completed.`);
+    } catch (e: any) {
+      if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
+        console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Processes a marketplace.order.received event from CRM.
+   */
+  async handleMarketplaceOrderReceived(event: IntegrationEvent<any>) {
+    const { tenantId, eventId } = event;
+    const {
+      marketplaceOrderId,
+      accountId,
+      warehouseId,
+      buyerBinIin,
+      buyerName,
+      requiresEsf,
+      items,
+      totalAmount
+    } = event.payload;
+
+    console.log(`[EventConsumer] Processing marketplace.order.received event: ${eventId} (Order: ${marketplaceOrderId})`);
+
+    await this.prismaService.ensureTenantSchema(tenantId);
+    const db = this.prismaService.getClient(tenantId);
+
+    try {
+      await db.$transaction(async (tx: any) => {
+        await tx.processedEvent.create({
+          data: {
+            id: eventId,
+            eventType: event.eventType
+          }
+        });
+
+        // 1. Setup Customer (By BIN if provided, otherwise default Kaspi retail customer)
+        const customerBin = buyerBinIin && String(buyerBinIin).trim().length > 0 ? String(buyerBinIin).trim() : '990000000000';
+        const customerName = buyerBinIin && String(buyerBinIin).trim().length > 0
+          ? (buyerName || 'Покупатель Kaspi')
+          : 'Kaspi.kz Магазин — Розница';
+
+        const customer = await tx.customer.upsert({
+          where: { bin: customerBin },
+          update: {
+            name: customerName
+          },
+          create: {
+            name: customerName,
+            bin: customerBin
+          }
+        });
+
+        // 2. Determine target warehouse
+        let targetWarehouseId = warehouseId;
+        if (!targetWarehouseId) {
+          const defaultWh = await tx.warehouse.findFirst({ where: { isDefault: true } });
+          targetWarehouseId = defaultWh?.id || 'default-main-warehouse';
+        }
+
+        // 3. Stock reservation for each physical item
+        for (const item of items) {
+          const existing = await tx.stockItem.findUnique({
+            where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } }
+          });
+
+          if (existing) {
+            await tx.stockItem.update({
+              where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } },
+              data: { reserved: { increment: item.quantity } }
+            });
+          } else {
+            await tx.stockItem.create({
+              data: {
+                sku: item.sku,
+                crmProductId: item.crmProductId || null,
+                warehouseId: targetWarehouseId,
+                quantity: 0,
+                reserved: item.quantity
+              }
+            });
+          }
+        }
+
+        // 4. Calculate line items totals
+        let totalVat = 0;
+        let calculatedTotal = 0;
+
+        const waybillLines = items.map((item: any) => {
+          const vatRate = item.vatRate || 12;
+          const totalExcludingVat = item.quantity * item.price;
+          const vat = totalExcludingVat * (vatRate / 100);
+          const totalWithVat = totalExcludingVat + vat;
+
+          totalVat += vat;
+          calculatedTotal += totalWithVat;
+
+          return {
+            sku: item.sku,
+            crmProductId: item.crmProductId || null,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+            vatRate,
+            vatAmount: vat,
+            totalAmount: totalWithVat
+          };
+        });
+
+        // 5. Create Waybill
+        const year = new Date().getFullYear();
+        const [{ nextval: wbSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+          SELECT nextval('waybill_number_seq') as nextval;
+        `;
+        const waybillNumber = `WAY-${year}-${wbSeq.toString().padStart(4, '0')}`;
+
+        const waybill = await tx.waybill.create({
+          data: {
+            number: waybillNumber,
+            customerId: customer.id,
+            warehouseId: targetWarehouseId,
+            amount: calculatedTotal || totalAmount,
+            vatAmount: totalVat,
+            status: 'DRAFT',
+            crmDealId: marketplaceOrderId,
+            items: {
+              create: waybillLines
+            }
+          }
+        });
+
+        console.log(`[EventConsumer] Draft Waybill ${waybill.number} created for Marketplace Order ${marketplaceOrderId}. Stock reserved.`);
+
+        // 6. Conditionally Create Invoice ONLY IF requiresEsf is true
+        if (requiresEsf === true) {
+          const [{ nextval: invSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+            SELECT nextval('invoice_number_seq') as nextval;
+          `;
+          const invoiceNumber = `INV-${year}-${invSeq.toString().padStart(4, '0')}`;
+          const dueDate = new Date();
+          dueDate.setDate(dueDate.getDate() + 14);
+
+          const invoice = await tx.invoice.create({
+            data: {
+              number: invoiceNumber,
+              customerId: customer.id,
+              amount: calculatedTotal || totalAmount,
+              vatAmount: totalVat,
+              paidAmount: 0.00,
+              status: 'DRAFT',
+              dueDate,
+              crmDealId: marketplaceOrderId,
+              items: {
+                create: waybillLines
+              }
+            }
+          });
+
+          console.log(`[EventConsumer] Draft Invoice ${invoice.number} created for Marketplace Order ${marketplaceOrderId} (requiresEsf: true).`);
+        } else {
+          console.log(`[EventConsumer] Invoice skipped for Marketplace Order ${marketplaceOrderId} (requiresEsf: false).`);
+        }
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
+        console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Processes a marketplace.order.cancelled event from CRM.
+   */
+  async handleMarketplaceOrderCancelled(event: IntegrationEvent<any>) {
+    const { tenantId, eventId } = event;
+    const { marketplaceOrderId, reason } = event.payload;
+
+    console.log(`[EventConsumer] Processing marketplace.order.cancelled event: ${eventId} (Order: ${marketplaceOrderId})`);
+
+    await this.prismaService.ensureTenantSchema(tenantId);
+    const db = this.prismaService.getClient(tenantId);
+
+    try {
+      await db.$transaction(async (tx: any) => {
+        await tx.processedEvent.create({
+          data: {
+            id: eventId,
+            eventType: event.eventType
+          }
+        });
+
+        // Find associated Waybill
+        const waybill = await tx.waybill.findFirst({
+          where: { crmDealId: marketplaceOrderId },
+          include: { items: true }
+        });
+
+        if (!waybill) {
+          console.warn(`[EventConsumer] Waybill for marketplace order ${marketplaceOrderId} not found. Skipping cancellation.`);
+          return;
+        }
+
+        if (waybill.status === 'DRAFT') {
+          // Cancel DRAFT waybill & release reserved stock
+          await tx.$executeRaw`
+            UPDATE "Waybill" SET status = 'CANCELLED', "updatedAt" = now()
+            WHERE id = ${waybill.id} AND status = 'DRAFT';
+          `;
+
+          const targetWarehouseId = waybill.warehouseId || 'default-main-warehouse';
+          for (const item of waybill.items) {
+            const existingStock = await tx.stockItem.findUnique({
+              where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } }
+            });
+            if (existingStock) {
+              await tx.stockItem.update({
+                where: { sku_warehouseId: { sku: item.sku, warehouseId: targetWarehouseId } },
+                data: { reserved: { decrement: Number(item.quantity) } }
+              });
+            }
+          }
+          console.log(`[EventConsumer] DRAFT Waybill ${waybill.number} cancelled & stock reservation released for order ${marketplaceOrderId}.`);
+        } else if (waybill.status === 'DELIVERED') {
+          // DELIVERED waybill -> Initiate RMA to return physical inventory
+          const year = new Date().getFullYear();
+          const [{ nextval: rmaSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+            SELECT nextval('rma_number_seq') as nextval;
+          `;
+          const rmaNumber = `RMA-${year}-${rmaSeq.toString().padStart(4, '0')}`;
+          const targetWarehouseId = waybill.warehouseId || 'default-main-warehouse';
+
+          const rma = await tx.rma.create({
+            data: {
+              number: rmaNumber,
+              waybillId: waybill.id,
+              reason: reason || 'Отмена доставленного заказа на маркетплейсе',
+              status: 'CONFIRMED',
+              confirmedAt: new Date(),
+              lines: {
+                create: waybill.items.map((i: any) => ({
+                  sku: i.sku,
+                  warehouseId: targetWarehouseId,
+                  quantity: Number(i.quantity)
+                }))
+              }
+            },
+            include: { lines: true }
+          });
+
+          // Increase physical stock quantity for each returned item
+          for (const line of rma.lines) {
+            const lineQty = Number(line.quantity);
+            const existing = await tx.stockItem.findUnique({
+              where: { sku_warehouseId: { sku: line.sku, warehouseId: line.warehouseId } }
+            });
+
+            if (existing) {
+              await tx.stockItem.update({
+                where: { sku_warehouseId: { sku: line.sku, warehouseId: line.warehouseId } },
+                data: { quantity: { increment: lineQty } }
+              });
+            } else {
+              await tx.stockItem.create({
+                data: {
+                  sku: line.sku,
+                  warehouseId: line.warehouseId,
+                  quantity: lineQty,
+                  reserved: 0
+                }
+              });
+            }
+          }
+          console.log(`[EventConsumer] DELIVERED Waybill ${waybill.number} cancelled via confirmed RMA ${rma.number}, inventory restored.`);
+        }
+      });
     } catch (e: any) {
       if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
         console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);

@@ -6,10 +6,11 @@ import { EventConsumerService } from './event-consumer.service.js';
 import { EsfQueueService } from './esf-queue.service.js';
 import { EsfWorkerService } from './esf-worker.service.js';
 import { ErpController } from './erp.controller.js';
+import { MarketplaceController } from './marketplace.controller.js';
 
 @Module({
   imports: [],
-  controllers: [ErpController],
+  controllers: [ErpController, MarketplaceController],
   providers: [Reflector, RolesGuard, TenantPrismaService, EventConsumerService, EsfQueueService, EsfWorkerService],
 })
 export class AppModule {}
