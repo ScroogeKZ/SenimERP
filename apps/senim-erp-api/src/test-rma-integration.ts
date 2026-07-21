@@ -188,6 +188,17 @@ async function runRmaTest() {
     throw new Error(`Expected positive quantity 10 for return movement, got ${rmaMovement.quantity}`);
   }
 
+  // Verify query by type=return returns 200 OK and matching return entries
+  const returnMovementsRes = await fetch(`${baseUrl}/api/stock/movements?type=return`, {
+    headers: getAuthHeaders()
+  });
+  if (!returnMovementsRes.ok) throw new Error(`GET /api/stock/movements?type=return failed with HTTP ${returnMovementsRes.status}: ${await returnMovementsRes.text()}`);
+  const returnMovements = await returnMovementsRes.json();
+  if (!Array.isArray(returnMovements) || !returnMovements.some((m: any) => m.referenceId === rma1.id)) {
+    throw new Error(`GET /api/stock/movements?type=return did not include expected RMA movement`);
+  }
+  console.log(`[Test 5.1 SUCCESS] StockMovement verified with ?type=return filter: returned HTTP 200 with ${returnMovements.length} items`);
+
   // Stock Movement reconciliation check across all movements for this SKU
   const allMovementsRes = await fetch(`${baseUrl}/api/stock/movements?sku=${sku}&warehouseId=${defaultWarehouseId}`, {
     headers: getAuthHeaders()
