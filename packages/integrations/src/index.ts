@@ -126,7 +126,7 @@ export interface EsfItemInfo {
 }
 
 export interface EsfDocumentData {
-  documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE';
+  documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE' | 'CREDIT_NOTE';
   documentId: string;
   documentNumber: string;
   turnoverDate: string; // YYYY-MM-DD

@@ -181,6 +181,41 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
           totalAmount: Number(invoice.amount),
           totalVatAmount: Number(invoice.vatAmount)
         };
+      } else if (documentType === 'CREDIT_NOTE') {
+        const creditNote = await db.creditNote.findUnique({
+          where: { id: documentId },
+          include: { customer: true, items: true }
+        });
+        if (!creditNote) throw new Error(`CreditNote ${documentId} not found`);
+        existingSignedXml = creditNote.signedXml || '';
+
+        docData = {
+          documentType: 'CREDIT_NOTE',
+          documentId: creditNote.id,
+          documentNumber: creditNote.number,
+          turnoverDate: creditNote.issueDate.toISOString().split('T')[0],
+          supplier: {
+            bin: '990840001234',
+            name: 'SenimERP Tenant',
+            address: 'г. Алматы, пр. Абая 150'
+          },
+          customer: {
+            bin: creditNote.customer.bin,
+            name: creditNote.customer.name,
+            address: creditNote.customer.address || undefined
+          },
+          items: creditNote.items.map((item: any) => ({
+            sku: item.sku,
+            name: item.name,
+            quantity: Number(item.quantity),
+            price: Number(item.price),
+            vatRate: Number(item.vatRate),
+            vatAmount: Number(item.vatAmount),
+            totalAmount: Number(item.totalAmount)
+          })),
+          totalAmount: Number(creditNote.amount),
+          totalVatAmount: Number(creditNote.vatAmount)
+        };
       }
 
       if (!docData) throw new Error(`Unsupported document type ${documentType}`);

@@ -22,6 +22,7 @@ model Customer {
   invoices  Invoice[]
   waybills  Waybill[]
   acts      ServiceAct[]
+  creditNotes CreditNote[]
 }
 
 model Invoice {
@@ -44,6 +45,7 @@ model Invoice {
   updatedAt      DateTime          @updatedAt
 
   payments       InvoicePayment[]
+  creditNotes    CreditNote[]
 }
 
 model InvoicePayment {
@@ -190,6 +192,8 @@ model EsfDocument {
   waybill       Waybill?     @relation(fields: [waybillId], references: [id])
   actId         String?      @unique
   act           ServiceAct?  @relation(fields: [actId], references: [id])
+  creditNoteId  String?      @unique
+  creditNote    CreditNote?  @relation(fields: [creditNoteId], references: [id])
   status        EsfStatus    @default(PENDING)
   esfRegNumber  String?      // регистрационный номер ЭСФ в ИС ЭСФ (после успешной подачи)
   requestXml    String?      @db.Text   // сформированный и подписанный XML, отправленный в ИС ЭСФ
@@ -217,6 +221,8 @@ model DocumentSignature {
   waybill     Waybill?    @relation(fields: [waybillId], references: [id])
   actId       String?     @unique
   act         ServiceAct? @relation(fields: [actId], references: [id])
+  creditNoteId String?    @unique
+  creditNote  CreditNote? @relation(fields: [creditNoteId], references: [id])
   signedBy    String      // Signer Name
   iin         String      // Signer IIN
   certSerial  String      // Cert Serial
@@ -370,6 +376,7 @@ model Rma {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   lines       RmaLine[]
+  creditNote  CreditNote?
 }
 
 model RmaLine {
@@ -380,6 +387,51 @@ model RmaLine {
   warehouseId String
   warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
   quantity    Decimal   @db.Decimal(12, 3)
+  price       Decimal   @db.Decimal(15, 2)
+  vatRate     Decimal   @db.Decimal(5, 2)
+  vatAmount   Decimal   @db.Decimal(15, 2)
+  totalAmount Decimal   @db.Decimal(15, 2)
+}
+
+enum CreditNoteStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+}
+
+model CreditNote {
+  id          String              @id @default(uuid())
+  number      String              @unique
+  rmaId       String              @unique
+  rma         Rma                 @relation(fields: [rmaId], references: [id])
+  invoiceId   String?
+  invoice     Invoice?            @relation(fields: [invoiceId], references: [id])
+  customerId  String
+  customer    Customer            @relation(fields: [customerId], references: [id])
+  amount      Decimal             @db.Decimal(15, 2)
+  vatAmount   Decimal             @db.Decimal(15, 2)
+  status      CreditNoteStatus    @default(DRAFT)
+  issueDate   DateTime            @default(now())
+  items       CreditNoteLineItem[]
+  signedXml   String?             @db.Text
+  signature   DocumentSignature?
+  esfDocument EsfDocument?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model CreditNoteLineItem {
+  id           String     @id @default(uuid())
+  creditNoteId String
+  creditNote   CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  sku          String
+  crmProductId String?
+  name         String
+  quantity     Decimal    @db.Decimal(12, 3)
+  price        Decimal    @db.Decimal(15, 2)
+  vatRate      Decimal    @db.Decimal(5, 2)
+  vatAmount    Decimal    @db.Decimal(15, 2)
+  totalAmount  Decimal    @db.Decimal(15, 2)
 }
 
 

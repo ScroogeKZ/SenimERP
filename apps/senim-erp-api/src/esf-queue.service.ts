@@ -6,7 +6,7 @@ import { redisConnection } from '@senimerp/event-bus-client';
 export interface EsfSubmissionJobPayload {
   tenantId: string;
   esfDocumentId: string;
-  documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE';
+  documentType: 'WAYBILL' | 'SERVICE_ACT' | 'INVOICE' | 'CREDIT_NOTE';
   documentId: string;
 }
 

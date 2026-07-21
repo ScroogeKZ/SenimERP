@@ -503,11 +503,23 @@ export class ErpController {
         reason: reason || null,
         status: 'DRAFT',
         lines: {
-          create: items.map((i) => ({
-            sku: i.sku,
-            warehouseId: targetWarehouseId,
-            quantity: i.quantity
-          }))
+          create: items.map((i) => {
+            const shippedItem = waybill.items.find((si: any) => si.sku === i.sku);
+            const price = Number(shippedItem?.price || 0);
+            const vatRate = Number(shippedItem?.vatRate || 0);
+            const qty = Number(i.quantity);
+            const lineVat = Number((price * qty * (vatRate / 100)).toFixed(2));
+            const lineTotal = Number((price * qty + lineVat).toFixed(2));
+            return {
+              sku: i.sku,
+              warehouseId: targetWarehouseId,
+              quantity: qty,
+              price,
+              vatRate,
+              vatAmount: lineVat,
+              totalAmount: lineTotal
+            };
+          })
         }
       },
       include: {
@@ -520,7 +532,10 @@ export class ErpController {
   @Post('rma/:id/confirm')
   async confirmRma(@Param('id') id: string, @Req() req: RequestWithUser) {
     const db = await this.getDb(req);
-    const rma = await db.rma.findUnique({ where: { id }, include: { lines: true } });
+    const rma = await db.rma.findUnique({
+      where: { id },
+      include: { lines: true, waybill: { include: { items: true } } }
+    });
     if (!rma) throw new NotFoundException('RMA not found');
 
     return db.$transaction(async (tx: any) => {
@@ -578,7 +593,63 @@ export class ErpController {
         });
       }
 
-      return rows[0];
+      // Create CreditNote in DRAFT status
+      const invoice = rma.waybill?.crmDealId
+        ? await tx.invoice.findFirst({
+            where: {
+              crmDealId: rma.waybill.crmDealId,
+              status: { notIn: ['DRAFT', 'CANCELLED'] }
+            }
+          })
+        : null;
+
+      let cnAmount = 0;
+      let cnVatAmount = 0;
+      for (const line of rma.lines) {
+        cnAmount += Number(line.totalAmount || 0);
+        cnVatAmount += Number(line.vatAmount || 0);
+      }
+      cnAmount = Number(cnAmount.toFixed(2));
+      cnVatAmount = Number(cnVatAmount.toFixed(2));
+
+      const year = new Date().getFullYear();
+      const [{ nextval: cnSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+        SELECT nextval('credit_note_number_seq') as nextval;
+      `;
+      const cnNumber = `CN-${year}-${cnSeq.toString().padStart(4, '0')}`;
+
+      const creditNote = await tx.creditNote.create({
+        data: {
+          number: cnNumber,
+          rmaId: rma.id,
+          invoiceId: invoice?.id || null,
+          customerId: rma.waybill.customerId,
+          amount: cnAmount,
+          vatAmount: cnVatAmount,
+          status: 'DRAFT',
+          items: {
+            create: rma.lines.map((line: any) => {
+              const wbItem = rma.waybill?.items?.find((wi: any) => wi.sku === line.sku);
+              return {
+                sku: line.sku,
+                crmProductId: wbItem?.crmProductId || null,
+                name: wbItem?.name || line.sku,
+                quantity: Number(line.quantity),
+                price: Number(line.price),
+                vatRate: Number(line.vatRate),
+                vatAmount: Number(line.vatAmount),
+                totalAmount: Number(line.totalAmount)
+              };
+            })
+          }
+        },
+        include: { items: true }
+      });
+
+      return {
+        ...rows[0],
+        creditNote
+      };
     });
   }
 
@@ -601,6 +672,156 @@ export class ErpController {
 
       return rows[0];
     });
+  }
+
+  // --- Credit Notes ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('credit-notes')
+  async getCreditNotes(
+    @Query('customerId') customerId: string | undefined,
+    @Query('rmaId') rmaId: string | undefined,
+    @Query('invoiceId') invoiceId: string | undefined,
+    @Query('status') status: string | undefined,
+    @Query('limit') limitStr: string | undefined,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    const where: any = {};
+    if (customerId) where.customerId = customerId;
+    if (rmaId) where.rmaId = rmaId;
+    if (invoiceId) where.invoiceId = invoiceId;
+    if (status) where.status = status;
+
+    let limit = 50;
+    if (limitStr) {
+      const parsed = parseInt(limitStr, 10);
+      if (!isNaN(parsed) && parsed > 0) limit = Math.min(parsed, 200);
+    }
+
+    return db.creditNote.findMany({
+      where,
+      include: { customer: true, items: true, esfDocument: true, signature: true },
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    });
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('credit-notes/:id')
+  async getCreditNoteById(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const cn = await db.creditNote.findUnique({
+      where: { id },
+      include: { customer: true, items: true, rma: true, invoice: true, esfDocument: true, signature: true }
+    });
+    if (!cn) throw new NotFoundException('CreditNote not found');
+    return cn;
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Post('credit-notes/:id/sign')
+  async signCreditNote(
+    @Param('id') id: string,
+    @Body('signedXml') signedXml: string,
+    @Req() req: RequestWithUser
+  ) {
+    if (!signedXml) throw new BadRequestException('signedXml is required');
+    const db = await this.getDb(req);
+
+    const certDetails = NCALayerService.verifySignature(signedXml);
+
+    let updated: any = null;
+
+    await db.$transaction(async (tx: any) => {
+      const rows = await tx.$queryRaw<Array<any>>`
+        UPDATE "CreditNote"
+        SET "status" = 'ISSUED',
+            "signedXml" = ${signedXml},
+            "updatedAt" = now()
+        WHERE id = ${id}
+          AND "status" = 'DRAFT'
+        RETURNING *;
+      `;
+
+      if (rows.length === 0) {
+        const existing = await tx.creditNote.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('CreditNote not found');
+        }
+        if (existing.status !== 'DRAFT') {
+          throw new BadRequestException('Only draft credit notes can be signed');
+        }
+        throw new BadRequestException('CreditNote signing cannot be processed');
+      }
+
+      updated = rows[0];
+
+      await tx.documentSignature.create({
+        data: {
+          creditNoteId: id,
+          signedBy: certDetails.signedBy,
+          iin: certDetails.iin,
+          certSerial: certDetails.certSerial
+        }
+      });
+    });
+
+    const esfDoc = await db.esfDocument.upsert({
+      where: { creditNoteId: id },
+      create: { creditNoteId: id, status: 'PENDING' },
+      update: { status: 'PENDING', errorMessage: null }
+    });
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'CREDIT_NOTE',
+      documentId: id
+    });
+
+    console.log(`[ERP API] CreditNote ${updated.number} signed by ${certDetails.signedBy} (IIN: ${certDetails.iin})`);
+    return db.creditNote.findUnique({
+      where: { id },
+      include: { customer: true, items: true, esfDocument: true, signature: true }
+    });
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Get('credit-notes/:id/esf')
+  async getCreditNoteEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const cn = await db.creditNote.findUnique({ where: { id } });
+    if (!cn) throw new NotFoundException('CreditNote not found');
+
+    const esfDoc = await db.esfDocument.findUnique({ where: { creditNoteId: id } });
+    if (!esfDoc) throw new NotFoundException('ESF document record not found for CreditNote');
+    return esfDoc;
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Post('credit-notes/:id/esf/retry')
+  async retryCreditNoteEsf(@Param('id') id: string, @Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const cn = await db.creditNote.findUnique({ where: { id } });
+    if (!cn) throw new NotFoundException('CreditNote not found');
+
+    const esfDoc = await db.esfDocument.findUnique({ where: { creditNoteId: id } });
+    if (!esfDoc) throw new NotFoundException('ESF document record not found for CreditNote');
+
+    await db.esfDocument.update({
+      where: { id: esfDoc.id },
+      data: { status: 'PENDING', errorMessage: null }
+    });
+
+    await this.esfQueueService.enqueueSubmission({
+      tenantId: req.user.tenantId,
+      esfDocumentId: esfDoc.id,
+      documentType: 'CREDIT_NOTE',
+      documentId: id
+    });
+
+    return { message: 'ESF submission retried', esfDocumentId: esfDoc.id };
   }
 
   // --- Purchasing (Suppliers & Purchase Orders) ---
@@ -1102,22 +1323,24 @@ export class ErpController {
   async getDebtors(@Req() req: RequestWithUser) {
     const db = await this.getDb(req);
     
-    // Fetch all customers, their invoices, waybills, and service acts
+    // Fetch all customers, their invoices, waybills, service acts, and credit notes
     const customers = await db.customer.findMany({
       include: {
         invoices: true,
         waybills: true,
-        acts: true
+        acts: true,
+        creditNotes: true
       }
     });
 
     // Calculate dynamic credit/debit balances
     // Debit: Amount billed (issued invoices)
-    // Credit: Amount received (paidAmount on invoices)
+    // Credit: Amount received (paidAmount) + Amount credited (ISSUED credit notes)
     // Outstanding Debt = Debit - Credit
     return customers.map((c: any) => {
       let totalBilled = 0;
       let totalPaid = 0;
+      let totalCredited = 0;
 
       c.invoices.forEach((inv: any) => {
         if (inv.status !== 'DRAFT' && inv.status !== 'CANCELLED') {
@@ -1126,7 +1349,13 @@ export class ErpController {
         }
       });
 
-      const debt = totalBilled - totalPaid;
+      c.creditNotes?.forEach((cn: any) => {
+        if (cn.status === 'ISSUED') {
+          totalCredited += Number(cn.amount);
+        }
+      });
+
+      const debt = totalBilled - totalPaid - totalCredited;
 
       return {
         customerId: c.id,
@@ -1135,10 +1364,12 @@ export class ErpController {
         bin: c.bin,
         totalBilled,
         totalPaid,
+        totalCredited,
         outstandingDebt: debt,
         invoiceCount: c.invoices.length,
         waybillCount: c.waybills.length,
-        actCount: c.acts.length
+        actCount: c.acts.length,
+        creditNoteCount: c.creditNotes?.length || 0
       };
     });
   }
@@ -1756,7 +1987,17 @@ export class ErpController {
       (inv: any) => inv.status !== 'DRAFT' && inv.status !== 'CANCELLED'
     );
 
-    const periodMap = new Map<string, { revenue: number; invoiceCount: number }>();
+    const allCreditNotes = await db.creditNote.findMany({
+      where: {
+        status: 'ISSUED',
+        issueDate: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      }
+    });
+
+    const periodMap = new Map<string, { grossRevenue: number; returns: number; invoiceCount: number; creditNoteCount: number }>();
 
     for (const inv of invoices) {
       const dt = new Date(inv.createdAt);
@@ -1771,21 +2012,49 @@ export class ErpController {
 
       let entry = periodMap.get(period);
       if (!entry) {
-        entry = { revenue: 0, invoiceCount: 0 };
+        entry = { grossRevenue: 0, returns: 0, invoiceCount: 0, creditNoteCount: 0 };
         periodMap.set(period, entry);
       }
 
-      entry.revenue += Number(inv.amount || 0);
+      entry.grossRevenue += Number(inv.amount || 0);
       entry.invoiceCount += 1;
+    }
+
+    for (const cn of allCreditNotes) {
+      const dt = new Date(cn.issueDate);
+      let period = '';
+      if (gran === 'day') {
+        period = dt.toISOString().slice(0, 10);
+      } else if (gran === 'week') {
+        period = getIsoWeekString(dt);
+      } else {
+        period = dt.toISOString().slice(0, 7);
+      }
+
+      let entry = periodMap.get(period);
+      if (!entry) {
+        entry = { grossRevenue: 0, returns: 0, invoiceCount: 0, creditNoteCount: 0 };
+        periodMap.set(period, entry);
+      }
+
+      entry.returns += Number(cn.amount || 0);
+      entry.creditNoteCount += 1;
     }
 
     return Array.from(periodMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([period, data]) => ({
-        period,
-        revenue: Number(data.revenue.toFixed(2)),
-        invoiceCount: data.invoiceCount
-      }));
+      .map(([period, data]) => {
+        const gross = Number(data.grossRevenue.toFixed(2));
+        const ret = Number(data.returns.toFixed(2));
+        return {
+          period,
+          revenue: gross,
+          returns: ret,
+          netRevenue: Number((gross - ret).toFixed(2)),
+          invoiceCount: data.invoiceCount,
+          creditNoteCount: data.creditNoteCount
+        };
+      });
   }
 
   // --- BI Reports: Module 2 (Top Customers) ---

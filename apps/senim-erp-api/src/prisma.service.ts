@@ -508,13 +508,61 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "rmaId" TEXT NOT NULL REFERENCES "${schema}"."Rma"("id") ON DELETE CASCADE,
                 "sku" TEXT NOT NULL,
                 "warehouseId" TEXT NOT NULL REFERENCES "${schema}"."Warehouse"("id") ON DELETE CASCADE,
-                "quantity" DECIMAL(12, 3) NOT NULL
+                "quantity" DECIMAL(12, 3) NOT NULL,
+                "price" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "vatRate" DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+                "vatAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "totalAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00
               );
             `);
 
             await tx.$executeRawUnsafe(`
               CREATE SEQUENCE IF NOT EXISTS "${schema}"."rma_number_seq" START WITH 1 INCREMENT BY 1;
             `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE SEQUENCE IF NOT EXISTS "${schema}"."credit_note_number_seq" START WITH 1 INCREMENT BY 1;
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."CreditNote" (
+                "id" TEXT PRIMARY KEY,
+                "number" TEXT UNIQUE NOT NULL,
+                "rmaId" TEXT UNIQUE NOT NULL REFERENCES "${schema}"."Rma"("id") ON DELETE RESTRICT,
+                "invoiceId" TEXT REFERENCES "${schema}"."Invoice"("id") ON DELETE SET NULL,
+                "customerId" TEXT NOT NULL REFERENCES "${schema}"."Customer"("id") ON DELETE RESTRICT,
+                "amount" DECIMAL(15, 2) NOT NULL,
+                "vatAmount" DECIMAL(15, 2) NOT NULL,
+                "status" TEXT NOT NULL DEFAULT 'DRAFT',
+                "issueDate" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "signedXml" TEXT,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."CreditNoteLineItem" (
+                "id" TEXT PRIMARY KEY,
+                "creditNoteId" TEXT NOT NULL REFERENCES "${schema}"."CreditNote"("id") ON DELETE CASCADE,
+                "sku" TEXT NOT NULL,
+                "crmProductId" TEXT,
+                "name" TEXT NOT NULL,
+                "quantity" DECIMAL(12, 3) NOT NULL,
+                "price" DECIMAL(15, 2) NOT NULL,
+                "vatRate" DECIMAL(5, 2) NOT NULL,
+                "vatAmount" DECIMAL(15, 2) NOT NULL,
+                "totalAmount" DECIMAL(15, 2) NOT NULL
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "price" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatRate" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "totalAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."DocumentSignature" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."EsfDocument" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
 
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
