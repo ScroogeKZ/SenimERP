@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { Roles } from './roles.decorator.js';
@@ -55,14 +55,23 @@ export class ErpController {
   @Post('invoices/:id/sign')
   async signInvoice(
     @Param('id') id: string,
-    @Body('signedXml') signedXml: string,
+    @Body('signedCms') signedCms: string | undefined,
+    @Body('signedXml') signedXml: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (!signedXml) throw new BadRequestException('signedXml is required');
+    const rawPayload = signedCms || signedXml;
+    if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
-    // Verify digital signature structure using NCALayer helper
-    const certDetails = NCALayerService.verifySignature(signedXml);
+    let certDetails;
+    try {
+      certDetails = await NCALayerService.verifySignature(rawPayload);
+    } catch (err: any) {
+      if (err.code === 'UNSUPPORTED_ALGORITHM') {
+        throw new NotImplementedException(err.message);
+      }
+      throw new BadRequestException(err.message || 'Signature verification failed');
+    }
 
     let updated: any = null;
 
@@ -232,12 +241,23 @@ export class ErpController {
   @Post('waybills/:id/sign')
   async signWaybill(
     @Param('id') id: string,
-    @Body('signedXml') signedXml: string,
+    @Body('signedCms') signedCms: string | undefined,
+    @Body('signedXml') signedXml: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (!signedXml) throw new BadRequestException('signedXml is required');
+    const rawPayload = signedCms || signedXml;
+    if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
-    const certDetails = NCALayerService.verifySignature(signedXml);
+
+    let certDetails;
+    try {
+      certDetails = await NCALayerService.verifySignature(rawPayload);
+    } catch (err: any) {
+      if (err.code === 'UNSUPPORTED_ALGORITHM') {
+        throw new NotImplementedException(err.message);
+      }
+      throw new BadRequestException(err.message || 'Signature verification failed');
+    }
 
     const waybill = await db.waybill.findUnique({
       where: { id },
@@ -736,13 +756,23 @@ export class ErpController {
   @Post('credit-notes/:id/sign')
   async signCreditNote(
     @Param('id') id: string,
-    @Body('signedXml') signedXml: string,
+    @Body('signedCms') signedCms: string | undefined,
+    @Body('signedXml') signedXml: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (!signedXml) throw new BadRequestException('signedXml is required');
+    const rawPayload = signedCms || signedXml;
+    if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
-    const certDetails = NCALayerService.verifySignature(signedXml);
+    let certDetails;
+    try {
+      certDetails = await NCALayerService.verifySignature(rawPayload);
+    } catch (err: any) {
+      if (err.code === 'UNSUPPORTED_ALGORITHM') {
+        throw new NotImplementedException(err.message);
+      }
+      throw new BadRequestException(err.message || 'Signature verification failed');
+    }
 
     let updated: any = null;
 
@@ -1267,12 +1297,23 @@ export class ErpController {
   @Post('acts/:id/sign')
   async signAct(
     @Param('id') id: string,
-    @Body('signedXml') signedXml: string,
+    @Body('signedCms') signedCms: string | undefined,
+    @Body('signedXml') signedXml: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (!signedXml) throw new BadRequestException('signedXml is required');
+    const rawPayload = signedCms || signedXml;
+    if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
-    const certDetails = NCALayerService.verifySignature(signedXml);
+
+    let certDetails;
+    try {
+      certDetails = await NCALayerService.verifySignature(rawPayload);
+    } catch (err: any) {
+      if (err.code === 'UNSUPPORTED_ALGORITHM') {
+        throw new NotImplementedException(err.message);
+      }
+      throw new BadRequestException(err.message || 'Signature verification failed');
+    }
 
     let updated: any = null;
 
