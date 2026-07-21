@@ -8,7 +8,7 @@ import { TenantPrismaService } from './prisma.service.js';
  * Formula: token = HMAC-SHA256(MARKETPLACE_CATALOG_SECRET, `${tenantId}:${accountId}`), in hex.
  */
 export function calculateKaspiCatalogToken(tenantId: string, accountId: string, customSecret?: string): string {
-  const secret = customSecret || process.env.MARKETPLACE_CATALOG_SECRET || 'senim-marketplace-catalog-secret-2026';
+  const secret = customSecret || process.env.MARKETPLACE_CATALOG_SECRET || 'senim_erp_catalog_secret';
   return crypto
     .createHmac('sha256', secret)
     .update(`${tenantId}:${accountId}`)
