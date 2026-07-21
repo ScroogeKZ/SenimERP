@@ -109,6 +109,9 @@ export class TenantPrismaService implements OnModuleDestroy {
                 IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'RmaStatus' AND n.nspname = '${schema}') THEN
                   CREATE TYPE "${schema}"."RmaStatus" AS ENUM ('DRAFT', 'CONFIRMED', 'CANCELLED');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'CreditNoteStatus' AND n.nspname = '${schema}') THEN
+                  CREATE TYPE "${schema}"."CreditNoteStatus" AS ENUM ('DRAFT', 'ISSUED', 'CANCELLED');
+                END IF;
               END$$;
             `);
 
@@ -551,7 +554,7 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "customerId" TEXT NOT NULL REFERENCES "${schema}"."Customer"("id") ON DELETE RESTRICT,
                 "amount" DECIMAL(15, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
-                "status" TEXT NOT NULL DEFAULT 'DRAFT',
+                "status" "${schema}"."CreditNoteStatus" NOT NULL DEFAULT 'DRAFT',
                 "issueDate" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 "signedXml" TEXT,
                 "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -578,6 +581,23 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatRate" DECIMAL(5, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatAmount" DECIMAL(15, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "totalAmount" DECIMAL(15, 2);`);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "price" DROP NOT NULL;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "price" DROP DEFAULT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "vatRate" DROP NOT NULL;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "vatRate" DROP DEFAULT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "vatAmount" DROP NOT NULL;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "vatAmount" DROP DEFAULT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "totalAmount" DROP NOT NULL;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ALTER COLUMN "totalAmount" DROP DEFAULT;`);
+
+            await tx.$executeRawUnsafe(`
+              UPDATE "${schema}"."RmaLine"
+              SET "price" = NULL, "vatRate" = NULL, "vatAmount" = NULL, "totalAmount" = NULL
+              WHERE "price" = 0.00 AND "vatRate" = 0.00 AND "vatAmount" = 0.00 AND "totalAmount" = 0.00;
+            `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNote" ALTER COLUMN "status" TYPE "${schema}"."CreditNoteStatus" USING "status"::"${schema}"."CreditNoteStatus";`);
 
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."DocumentSignature" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."EsfDocument" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);

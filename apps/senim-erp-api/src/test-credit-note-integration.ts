@@ -261,6 +261,51 @@ async function runCreditNoteTest() {
     throw new Error('FK constraint on DocumentSignature.creditNoteId is missing! Insertion of invalid FK succeeded!');
   }
 
+  // --- Test: Legacy RmaLine Migration & Null Price Fallback ---
+  console.log('[RmaLine Migration Test] Testing legacy RmaLine with 0.00 values corrected by migration script...');
+  const legacyWaybillId = `wb_legacy_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Waybill" (id, number, "customerId", "warehouseId", amount, "vatAmount", status)
+    VALUES ('${legacyWaybillId}', 'WAY-LEGACY-01', '${customerId}', '${defaultWarehouseId}', 22400, 2400, 'DELIVERED');
+  `);
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('line_legacy_${Date.now()}', '${legacyWaybillId}', '${sku}', 'Старый Товар', 2, 10000, 12, 2400, 22400);
+  `);
+  const legacyRmaId = `rma_legacy_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Rma" (id, number, "waybillId", reason, status)
+    VALUES ('${legacyRmaId}', 'RMA-LEG-001', '${legacyWaybillId}', 'Возврат старого товара', 'DRAFT');
+  `);
+
+  // Simulate buggy migration data: price, vatRate, vatAmount, totalAmount were inserted as 0.00
+  const legacyRmaLineId = `rmaline_legacy_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."RmaLine" (id, "rmaId", sku, "warehouseId", quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('${legacyRmaLineId}', '${legacyRmaId}', '${sku}', '${defaultWarehouseId}', 2, 0.00, 0.00, 0.00, 0.00);
+  `);
+
+  // Execute corrective migration UPDATE query
+  await tenantClient.$executeRawUnsafe(`
+    UPDATE "${schemaName}"."RmaLine"
+    SET price = NULL, "vatRate" = NULL, "vatAmount" = NULL, "totalAmount" = NULL
+    WHERE price = 0.00 AND "vatRate" = 0.00 AND "vatAmount" = 0.00 AND "totalAmount" = 0.00;
+  `);
+
+  // Confirm legacy RMA
+  const confirmLegacyRes = await fetch(`${baseUrl}/api/rma/${legacyRmaId}/confirm`, {
+    method: 'POST',
+    headers: getAuthHeaders()
+  });
+  if (!confirmLegacyRes.ok) throw new Error(`confirmRma for legacy RMA failed: ${await confirmLegacyRes.text()}`);
+  const confirmLegacyData = await confirmLegacyRes.json();
+  const legacyCreditNote = confirmLegacyData.creditNote;
+  console.log(`[RmaLine Migration Test SUCCESS] Legacy CreditNote created: amount=${legacyCreditNote.amount}, vatAmount=${legacyCreditNote.vatAmount}`);
+
+  if (Number(legacyCreditNote.amount) !== 22400 || Number(legacyCreditNote.vatAmount) !== 2400) {
+    throw new Error(`Legacy CreditNote amount should use WaybillLineItem price fallback (22400), but got ${legacyCreditNote.amount}!`);
+  }
+
   await tenantClient.$disconnect();
   console.log('=== CREDIT NOTE INTEGRATION TEST PASSED SUCCESSFULLY! ===');
   await app.close();

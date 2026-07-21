@@ -666,15 +666,16 @@ export class ErpController {
         });
       }
 
-      // Create CreditNote in DRAFT status
-      const invoice = rma.waybill?.crmDealId
-        ? await tx.invoice.findFirst({
-            where: {
-              crmDealId: rma.waybill.crmDealId,
-              status: { notIn: ['DRAFT', 'CANCELLED'] }
-            }
-          })
-        : null;
+      const invoices = rma.waybill?.crmDealId
+        ? await tx.$queryRaw<Array<any>>`
+            SELECT * FROM "Invoice"
+            WHERE "crmDealId" = ${rma.waybill.crmDealId}
+              AND "status" NOT IN ('DRAFT', 'CANCELLED')
+            ORDER BY "createdAt" DESC
+            LIMIT 1;
+          `
+        : [];
+      const invoice = invoices.length > 0 ? invoices[0] : null;
 
       let cnAmount = 0;
       let cnVatAmount = 0;
