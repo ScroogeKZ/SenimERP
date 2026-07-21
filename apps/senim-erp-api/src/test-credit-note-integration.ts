@@ -229,6 +229,38 @@ async function runCreditNoteTest() {
     throw new Error(`Unlinked CreditNote should have invoiceId=null, got ${confirmNoInvData.creditNote.invoiceId}`);
   }
 
+  // Defect 1 check: RBAC 403 Forbidden assertion for unauthorized role on GET /api/credit-notes
+  console.log('[Defect 1 Test] Testing RBAC restriction on GET /api/credit-notes for unauthorized role...');
+  const unauthorizedToken = signSsoToken({
+    sub: 'usr_unauthorized',
+    tenantId,
+    email: 'unauthorized@senim.kz',
+    roles: ['CRM_MANAGER']
+  });
+  const forbiddenRes = await fetch(`${baseUrl}/api/credit-notes`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${unauthorizedToken}` }
+  });
+  if (forbiddenRes.status !== 403) {
+    throw new Error(`Expected HTTP 403 Forbidden for unauthorized role on GET /api/credit-notes, got ${forbiddenRes.status}`);
+  }
+  console.log('[Defect 1 Test SUCCESS] GET /api/credit-notes correctly rejected unauthorized role with HTTP 403 Forbidden.');
+
+  // Defect 2 check: Foreign Key constraint assertion on DocumentSignature & EsfDocument
+  console.log('[Defect 2 Test] Testing Foreign Key constraint on DocumentSignature and EsfDocument...');
+  let fkErrorOccurred = false;
+  try {
+    await tenantClient.$executeRawUnsafe(`
+      INSERT INTO "${schemaName}"."DocumentSignature" (id, "creditNoteId", "signedBy", iin, "certSerial")
+      VALUES ('sig_invalid_fk', 'non_existent_cn_id', 'Test', '123456789012', 'SERIAL');
+    `);
+  } catch (e: any) {
+    fkErrorOccurred = true;
+    console.log('[Defect 2 Test SUCCESS] FK violation caught on DocumentSignature insert with invalid creditNoteId.');
+  }
+  if (!fkErrorOccurred) {
+    throw new Error('FK constraint on DocumentSignature.creditNoteId is missing! Insertion of invalid FK succeeded!');
+  }
+
   await tenantClient.$disconnect();
   console.log('=== CREDIT NOTE INTEGRATION TEST PASSED SUCCESSFULLY! ===');
   await app.close();

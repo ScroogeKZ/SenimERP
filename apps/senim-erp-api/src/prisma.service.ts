@@ -564,6 +564,18 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."DocumentSignature" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."EsfDocument" ADD COLUMN IF NOT EXISTS "creditNoteId" TEXT UNIQUE;`);
 
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."DocumentSignature" DROP CONSTRAINT IF EXISTS "DocumentSignature_creditNoteId_fkey";`);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."DocumentSignature" ADD CONSTRAINT "DocumentSignature_creditNoteId_fkey"
+                FOREIGN KEY ("creditNoteId") REFERENCES "${schema}"."CreditNote"("id") ON DELETE SET NULL;
+            `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."EsfDocument" DROP CONSTRAINT IF EXISTS "EsfDocument_creditNoteId_fkey";`);
+            await tx.$executeRawUnsafe(`
+              ALTER TABLE "${schema}"."EsfDocument" ADD CONSTRAINT "EsfDocument_creditNoteId_fkey"
+                FOREIGN KEY ("creditNoteId") REFERENCES "${schema}"."CreditNote"("id") ON DELETE SET NULL;
+            `);
+
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "originalPrice" DECIMAL(15, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."InvoiceLineItem" ADD COLUMN IF NOT EXISTS "discountPercent" DECIMAL(5, 2) NOT NULL DEFAULT 0.00;`);
