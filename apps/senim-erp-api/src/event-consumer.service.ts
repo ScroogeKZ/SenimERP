@@ -612,6 +612,16 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
                 }
               });
             }
+
+            await tx.stockMovement.create({
+              data: {
+                sku: line.sku,
+                warehouseId: line.warehouseId,
+                quantity: lineQty,
+                type: 'return',
+                referenceId: rma.id
+              }
+            });
           }
           console.log(`[EventConsumer] DELIVERED Waybill ${waybill.number} cancelled via confirmed RMA ${rma.number}, inventory restored.`);
         }

@@ -566,6 +566,16 @@ export class ErpController {
             }
           });
         }
+
+        await tx.stockMovement.create({
+          data: {
+            sku: line.sku,
+            warehouseId: line.warehouseId,
+            quantity: lineQty,
+            type: 'return',
+            referenceId: rma.id
+          }
+        });
       }
 
       return rows[0];
@@ -960,8 +970,8 @@ export class ErpController {
     @Query('limit') limitStr: string | undefined,
     @Req() req: RequestWithUser
   ) {
-    if (type && type !== 'receipt' && type !== 'shipment') {
-      throw new BadRequestException("type must be either 'receipt' or 'shipment'");
+    if (type && type !== 'receipt' && type !== 'shipment' && type !== 'return') {
+      throw new BadRequestException("type must be either 'receipt', 'shipment', or 'return'");
     }
 
     const db = await this.getDb(req);

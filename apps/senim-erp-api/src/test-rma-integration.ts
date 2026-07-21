@@ -165,6 +165,42 @@ async function runRmaTest() {
     throw new Error(`Expected quantity 40 after return. Got ${stock?.quantity}`);
   }
 
+  // Step 5.1: Verify StockMovement creation for confirmed RMA
+  console.log(`[Test 5.1] Verifying StockMovement creation for RMA ${rma1.id}...`);
+  const movementsRes = await fetch(`${baseUrl}/api/stock/movements?referenceId=${rma1.id}`, {
+    headers: getAuthHeaders()
+  });
+  if (!movementsRes.ok) throw new Error(`GET /api/stock/movements failed: ${await movementsRes.text()}`);
+  const rmaMovements = await movementsRes.json();
+
+  if (rmaMovements.length !== rma1.lines.length) {
+    throw new Error(`Expected ${rma1.lines.length} StockMovement records for RMA, got ${rmaMovements.length}`);
+  }
+
+  const rmaMovement = rmaMovements[0];
+  if (rmaMovement.type !== 'return') {
+    throw new Error(`Expected StockMovement type 'return', got '${rmaMovement.type}'`);
+  }
+  if (rmaMovement.referenceId !== rma1.id) {
+    throw new Error(`Expected referenceId '${rma1.id}', got '${rmaMovement.referenceId}'`);
+  }
+  if (Number(rmaMovement.quantity) !== 10) {
+    throw new Error(`Expected positive quantity 10 for return movement, got ${rmaMovement.quantity}`);
+  }
+
+  // Stock Movement reconciliation check across all movements for this SKU
+  const allMovementsRes = await fetch(`${baseUrl}/api/stock/movements?sku=${sku}&warehouseId=${defaultWarehouseId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!allMovementsRes.ok) throw new Error(`GET /api/stock/movements for sku failed: ${await allMovementsRes.text()}`);
+  const allMovements = await allMovementsRes.json();
+
+  const totalMovementQty = allMovements.reduce((sum: number, m: any) => sum + Number(m.quantity), 0);
+  if (totalMovementQty !== Number(stock?.quantity)) {
+    throw new Error(`Stock reconciliation failed! Sum of movements=${totalMovementQty}, StockItem.quantity=${stock?.quantity}`);
+  }
+  console.log(`[Test 5.1 SUCCESS] StockMovement verified and reconciled: sum(${totalMovementQty}) === StockItem.quantity(${stock?.quantity})`);
+
   // Step 6: Create DRAFT RMA 2 for 5 units and cancel it -> status CANCELLED, stock remains quantity=40
   console.log('[Test 6] Creating and cancelling DRAFT RMA 2 for 5 units...');
   const rma2Res = await fetch(`${baseUrl}/api/rma`, {
