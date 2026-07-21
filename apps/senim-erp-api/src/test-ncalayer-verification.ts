@@ -103,10 +103,11 @@ async function runNcaLayerVerificationTest() {
 
   // Test 4: Real RSA X.509 CMS Generation and Verification (happy path)
   console.log('[Test 4] Generating real RSA X.509 certificate & PKCS#7 CMS signature...');
+  const defaultExpectedContent = 'Test document content to sign';
   const { cmsBase64, cert: validCert } = generateRsaCmsSigned();
 
   console.log('[Test 4] Verifying generated RSA PKCS#7 CMS signature...');
-  const realResult = await NCALayerService.verifySignature(cmsBase64);
+  const realResult = await NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent });
   console.log('[Test 4 SUCCESS] Real RSA CMS parsed:', realResult);
 
   if (realResult.iin !== '850101300123' || realResult.bin !== '990240001122' || realResult.signedBy !== 'Иванов Иван Иванович') {
@@ -117,7 +118,7 @@ async function runNcaLayerVerificationTest() {
   console.log('[Test 5] Testing CERT_EXPIRED rejection...');
   await expectVerificationError(
     'Test 5',
-    () => NCALayerService.verifySignature(cmsBase64, { now: new Date(Date.now() + 365 * 2 * 24 * 3600 * 1000) }),
+    () => NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent, now: new Date(Date.now() + 365 * 2 * 24 * 3600 * 1000) }),
     'CERT_EXPIRED'
   );
 
@@ -135,7 +136,7 @@ async function runNcaLayerVerificationTest() {
     const corruptedBase64 = corrupted.toString('base64');
     await expectVerificationError(
       'Test 6',
-      () => NCALayerService.verifySignature(corruptedBase64),
+      () => NCALayerService.verifySignature(corruptedBase64, { expectedContent: defaultExpectedContent }),
       'SIGNATURE_INVALID'
     );
   }
@@ -149,7 +150,7 @@ async function runNcaLayerVerificationTest() {
     const { cmsBase64: mismatchedCms } = generateRsaCmsSigned({
       signWithKey: keysA.privateKey // sign with keysA, but cert contains the default keysB public key
     });
-    await expectVerificationError('Test 7', () => NCALayerService.verifySignature(mismatchedCms), 'SIGNATURE_INVALID');
+    await expectVerificationError('Test 7', () => NCALayerService.verifySignature(mismatchedCms, { expectedContent: defaultExpectedContent }), 'SIGNATURE_INVALID');
   }
 
   // Test 8: Untrusted CA root → CHAIN_UNTRUSTED
@@ -194,7 +195,7 @@ async function runNcaLayerVerificationTest() {
       process.env.NCA_ROOT_CERT_RSA_PATH = rootPath;
 
       // CMS was signed with a self-signed cert (not signed by our trusted root)
-      await expectVerificationError('Test 8', () => NCALayerService.verifySignature(cmsBase64), 'CHAIN_UNTRUSTED');
+      await expectVerificationError('Test 8', () => NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent }), 'CHAIN_UNTRUSTED');
     } finally {
       // Restore original env vars
       if (origMock !== undefined) process.env.NCALAYER_MOCK = origMock;
@@ -224,7 +225,7 @@ async function runNcaLayerVerificationTest() {
       delete process.env.NCA_OCSP_URL;
       delete process.env.NCA_CRL_URL;
 
-      await expectVerificationError('Test 9', () => NCALayerService.verifySignature(cmsBase64), 'CHAIN_UNTRUSTED');
+      await expectVerificationError('Test 9', () => NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent }), 'CHAIN_UNTRUSTED');
     } finally {
       if (origMock !== undefined) process.env.NCALAYER_MOCK = origMock;
       else delete process.env.NCALAYER_MOCK;
@@ -256,7 +257,7 @@ async function runNcaLayerVerificationTest() {
       process.env.NCALAYER_MOCK = 'true'; // keep mock to skip trust chain for this test
       process.env.NCA_OCSP_URL = ocspUrl;
 
-      await expectVerificationError('Test 10', () => NCALayerService.verifySignature(cmsBase64), 'CERT_REVOKED');
+      await expectVerificationError('Test 10', () => NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent }), 'CERT_REVOKED');
     } finally {
       if (origMock !== undefined) process.env.NCALAYER_MOCK = origMock;
       else delete process.env.NCALAYER_MOCK;
@@ -287,7 +288,7 @@ async function runNcaLayerVerificationTest() {
       process.env.NCA_OCSP_URL = ocspUrl;
       process.env.NCA_REVOCATION_CHECK_TIMEOUT_MS = '500'; // 500ms timeout
 
-      await expectVerificationError('Test 11', () => NCALayerService.verifySignature(cmsBase64), 'REVOCATION_CHECK_FAILED');
+      await expectVerificationError('Test 11', () => NCALayerService.verifySignature(cmsBase64, { expectedContent: defaultExpectedContent }), 'REVOCATION_CHECK_FAILED');
     } finally {
       if (origMock !== undefined) process.env.NCALAYER_MOCK = origMock;
       else delete process.env.NCALAYER_MOCK;
@@ -299,7 +300,23 @@ async function runNcaLayerVerificationTest() {
     }
   }
 
-  console.log('=== ALL 11 NCALAYER VERIFICATION TESTS PASSED SUCCESSFULLY! ===');
+  // Test 12: CMS content mismatch → CONTENT_MISMATCH
+  console.log('[Test 12] Testing CMS signature with mismatched content payload...');
+  await expectVerificationError(
+    'Test 12',
+    () => NCALayerService.verifySignature(cmsBase64, { expectedContent: 'WRONG_PAYLOAD_STRING' }),
+    'CONTENT_MISMATCH'
+  );
+
+  // Test 13: Missing expectedContent option for CMS signature → CONTENT_MISMATCH
+  console.log('[Test 13] Testing CMS signature with missing expectedContent option...');
+  await expectVerificationError(
+    'Test 13',
+    () => NCALayerService.verifySignature(cmsBase64),
+    'CONTENT_MISMATCH'
+  );
+
+  console.log('=== ALL 13 NCALAYER VERIFICATION TESTS PASSED SUCCESSFULLY! ===');
   process.exit(0);
 }
 

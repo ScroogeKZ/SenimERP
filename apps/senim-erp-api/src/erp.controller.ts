@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException, Inject } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { Roles } from './roles.decorator.js';
@@ -8,6 +8,7 @@ import { NCALayerService } from '@senimerp/integrations';
 import { EventBusPublisher } from '@senimerp/event-bus-client';
 import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
 import crypto from 'crypto';
+import { buildSignaturePayload } from './signature-payload.js';
 
 @Controller('api')
 @UseGuards(AuthGuard, RolesGuard)
@@ -15,8 +16,8 @@ export class ErpController {
   private publisher = new EventBusPublisher();
 
   constructor(
-    private readonly prismaService: TenantPrismaService,
-    private readonly esfQueueService: EsfQueueService
+    @Inject(TenantPrismaService) private readonly prismaService: TenantPrismaService,
+    @Inject(EsfQueueService) private readonly esfQueueService: EsfQueueService
   ) {}
 
   /**
@@ -52,6 +53,24 @@ export class ErpController {
   }
 
   @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Get('invoices/:id/sign-payload')
+  async getInvoiceSignPayload(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    const invoice = await db.invoice.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const payload = buildSignaturePayload('INVOICE', invoice, supplierBin);
+    return { payload };
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('invoices/:id/sign')
   async signInvoice(
     @Param('id') id: string,
@@ -63,9 +82,20 @@ export class ErpController {
     if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
+    const invoice = await db.invoice.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    if (invoice.status !== 'DRAFT') throw new BadRequestException('Only draft invoices can be signed');
+
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const expectedContent = buildSignaturePayload('INVOICE', invoice, supplierBin);
+
     let certDetails;
     try {
-      certDetails = await NCALayerService.verifySignature(rawPayload);
+      certDetails = await NCALayerService.verifySignature(rawPayload, { expectedContent });
     } catch (err: any) {
       if (err.code === 'UNSUPPORTED_ALGORITHM') {
         throw new NotImplementedException(err.message);
@@ -238,6 +268,24 @@ export class ErpController {
   }
 
   @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
+  @Get('waybills/:id/sign-payload')
+  async getWaybillSignPayload(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    const waybill = await db.waybill.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!waybill) throw new NotFoundException('Waybill not found');
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const payload = buildSignaturePayload('WAYBILL', waybill, supplierBin);
+    return { payload };
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('waybills/:id/sign')
   async signWaybill(
     @Param('id') id: string,
@@ -249,21 +297,26 @@ export class ErpController {
     if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
+    const waybill = await db.waybill.findUnique({
+      where: { id },
+      include: { customer: true, items: true }
+    });
+    if (!waybill) throw new NotFoundException('Waybill not found');
+    if (waybill.status !== 'DRAFT') throw new BadRequestException('Only draft waybills can be signed');
+
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const expectedContent = buildSignaturePayload('WAYBILL', waybill, supplierBin);
+
     let certDetails;
     try {
-      certDetails = await NCALayerService.verifySignature(rawPayload);
+      certDetails = await NCALayerService.verifySignature(rawPayload, { expectedContent });
     } catch (err: any) {
       if (err.code === 'UNSUPPORTED_ALGORITHM') {
         throw new NotImplementedException(err.message);
       }
       throw new BadRequestException(err.message || 'Signature verification failed');
     }
-
-    const waybill = await db.waybill.findUnique({
-      where: { id },
-      include: { items: true }
-    });
-    if (!waybill) throw new NotFoundException('Waybill not found');
 
     const { updated, stockChanges } = await db.$transaction(async (tx: any) => {
       const rows = await tx.$queryRaw<Array<any>>`
@@ -753,6 +806,24 @@ export class ErpController {
   }
 
   @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Get('credit-notes/:id/sign-payload')
+  async getCreditNoteSignPayload(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    const cn = await db.creditNote.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!cn) throw new NotFoundException('CreditNote not found');
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const payload = buildSignaturePayload('CREDIT_NOTE', cn, supplierBin);
+    return { payload };
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('credit-notes/:id/sign')
   async signCreditNote(
     @Param('id') id: string,
@@ -764,9 +835,20 @@ export class ErpController {
     if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
+    const cn = await db.creditNote.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!cn) throw new NotFoundException('CreditNote not found');
+    if (cn.status !== 'DRAFT') throw new BadRequestException('Only draft credit notes can be signed');
+
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const expectedContent = buildSignaturePayload('CREDIT_NOTE', cn, supplierBin);
+
     let certDetails;
     try {
-      certDetails = await NCALayerService.verifySignature(rawPayload);
+      certDetails = await NCALayerService.verifySignature(rawPayload, { expectedContent });
     } catch (err: any) {
       if (err.code === 'UNSUPPORTED_ALGORITHM') {
         throw new NotImplementedException(err.message);
@@ -1294,6 +1376,24 @@ export class ErpController {
   }
 
   @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Get('acts/:id/sign-payload')
+  async getActSignPayload(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser
+  ) {
+    const db = await this.getDb(req);
+    const act = await db.serviceAct.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!act) throw new NotFoundException('Act of work not found');
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const payload = buildSignaturePayload('ACT', act, supplierBin);
+    return { payload };
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
   @Post('acts/:id/sign')
   async signAct(
     @Param('id') id: string,
@@ -1305,9 +1405,20 @@ export class ErpController {
     if (!rawPayload) throw new BadRequestException('signedCms or signedXml payload is required');
     const db = await this.getDb(req);
 
+    const act = await db.serviceAct.findUnique({
+      where: { id },
+      include: { customer: true }
+    });
+    if (!act) throw new NotFoundException('Act of work not found');
+    if (act.status !== 'DRAFT') throw new BadRequestException('Only draft service acts can be signed');
+
+    const profile = await db.tenantProfile.findFirst();
+    const supplierBin = profile?.companyBin || '000000000000';
+    const expectedContent = buildSignaturePayload('ACT', act, supplierBin);
+
     let certDetails;
     try {
-      certDetails = await NCALayerService.verifySignature(rawPayload);
+      certDetails = await NCALayerService.verifySignature(rawPayload, { expectedContent });
     } catch (err: any) {
       if (err.code === 'UNSUPPORTED_ALGORITHM') {
         throw new NotImplementedException(err.message);

@@ -1,7 +1,42 @@
+import 'reflect-metadata';
 import { PrismaClient } from '@prisma/client';
 import { signSsoToken } from '@senimerp/auth-client';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import forge from 'node-forge';
+
+function generateCmsForPayload(contentString: string): string {
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = '0123456789ABCDEF';
+  cert.validity.notBefore = new Date(Date.now() - 3600 * 1000);
+  cert.validity.notAfter = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+  cert.setSubject([
+    { name: 'commonName', value: forge.util.encodeUtf8('Тестовый Подписант') },
+    { type: '1.2.398.3.3.2.1', value: 'IIN850101300123' },
+    { type: '1.2.398.3.3.2.2', value: 'BIN990240001122' }
+  ]);
+  cert.setIssuer([{ name: 'commonName', value: forge.util.encodeUtf8('НУЦ РК RSA (NCA RK)') }]);
+  cert.sign(keys.privateKey, forge.md.sha256.create());
+
+  const p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(contentString, 'utf8');
+  p7.addCertificate(cert);
+  p7.addSigner({
+    key: keys.privateKey,
+    certificate: cert,
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [
+      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+      { type: forge.pki.oids.messageDigest },
+      { type: forge.pki.oids.signingTime, value: new Date() as any }
+    ]
+  });
+  p7.sign();
+  const derBuf = forge.asn1.toDer(p7.toAsn1());
+  return Buffer.from(derBuf.getBytes(), 'binary').toString('base64');
+}
 
 async function runSigningGuardsTest() {
   console.log('=== STARTING DOCUMENT SIGNING GUARDS & CONCURRENCY TEST ===');
@@ -45,8 +80,8 @@ async function runSigningGuardsTest() {
   });
 
   console.log('[Test] Triggering on-demand schema provisioning...');
-  const initRes = await fetch(`${baseUrl}/api/invoices`, { headers: getAuthHeaders() });
-  if (!initRes.ok) throw new Error(`Initial invoice query failed: ${await initRes.text()}`);
+  const initRes = await fetch(`${baseUrl}/api/warehouses`, { headers: getAuthHeaders() });
+  if (!initRes.ok) throw new Error(`Initial schema provisioning failed: ${await initRes.text()}`);
 
   const customerId = `cust_sign_${Date.now()}`;
   const waybillId = `wb_sign_${Date.now()}`;
@@ -176,6 +211,73 @@ async function runSigningGuardsTest() {
   });
   if (seqActRes.ok) throw new Error('Re-signing already signed act succeeded when it should have failed!');
   console.log(`[Sequential Test SUCCESS] Rejected with HTTP ${seqActRes.status}: ${await seqActRes.text()}`);
+
+  // =========================================================================
+  // SECTION 4: CMS Content Binding & Payload Verification Tests
+  // =========================================================================
+  console.log('\n--- SECTION 4: CMS Content Binding & Payload Verification ---');
+
+  const invoiceId = `inv_sign_payload_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", status, "issueDate", "dueDate", "updatedAt")
+    VALUES ('${invoiceId}', 'INV-BIND-001', '${customerId}', 50000, 6000, 'DRAFT', NOW(), NOW(), NOW());
+  `);
+
+  console.log('[Content Binding Test 1] Requesting GET /api/invoices/:id/sign-payload...');
+  const payloadRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/sign-payload`, {
+    headers: getAuthHeaders()
+  });
+  if (!payloadRes.ok) throw new Error(`GET sign-payload failed: ${await payloadRes.text()}`);
+  const payloadData = await payloadRes.json();
+  console.log(`[Content Binding Test 1 SUCCESS] Received sign-payload:`, payloadData);
+  if (!payloadData.payload || !payloadData.payload.startsWith('INVOICE|')) {
+    throw new Error(`Invalid payload returned: ${JSON.stringify(payloadData)}`);
+  }
+
+  console.log('[Content Binding Test 2] Signing invoice with CMS signature for WRONG payload...');
+  const wrongCms = generateCmsForPayload('INVOICE|wrong_id|WRONG_NUM|110102030405|000000000000|50000|6000|2026-01-01T00:00:00.000Z');
+  const wrongSignRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/sign`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ signedCms: wrongCms })
+  });
+  if (wrongSignRes.ok) throw new Error('Signing invoice with mismatched CMS signature succeeded when it should have failed!');
+  const wrongSignError = await wrongSignRes.json();
+  console.log(`[Content Binding Test 2 SUCCESS] Mismatched CMS correctly rejected with status ${wrongSignRes.status}: ${JSON.stringify(wrongSignError)}`);
+
+  console.log('[Content Binding Test 3] Signing invoice with CORRECT CMS signature payload...');
+  const correctCms = generateCmsForPayload(payloadData.payload);
+  const correctSignRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/sign`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ signedCms: correctCms })
+  });
+  if (!correctSignRes.ok) throw new Error(`Signing invoice with matching CMS signature failed: ${await correctSignRes.text()}`);
+  const correctSignData = await correctSignRes.json();
+  console.log(`[Content Binding Test 3 SUCCESS] Invoice signed successfully with matching CMS content binding:`, correctSignData.status);
+
+  console.log('[Content Binding Test 4] Document modified after sign-payload fetch (race condition test)...');
+  const invoiceId2 = `inv_sign_payload_race_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", status, "issueDate", "dueDate", "updatedAt")
+    VALUES ('${invoiceId2}', 'INV-BIND-002', '${customerId}', 75000, 9000, 'DRAFT', NOW(), NOW(), NOW());
+  `);
+  const payloadRes2 = await fetch(`${baseUrl}/api/invoices/${invoiceId2}/sign-payload`, { headers: getAuthHeaders() });
+  const payloadData2 = await payloadRes2.json();
+  const oldCms = generateCmsForPayload(payloadData2.payload);
+
+  // Simulate document update (updatedAt changes)
+  await tenantClient.$executeRawUnsafe(`
+    UPDATE "${schemaName}"."Invoice" SET "updatedAt" = NOW() + INTERVAL '1 second' WHERE id = '${invoiceId2}';
+  `);
+
+  const outdatedSignRes = await fetch(`${baseUrl}/api/invoices/${invoiceId2}/sign`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ signedCms: oldCms })
+  });
+  if (outdatedSignRes.ok) throw new Error('Signing invoice with outdated signature (modified document) succeeded when it should have failed!');
+  console.log(`[Content Binding Test 4 SUCCESS] Outdated signature correctly rejected after document modification.`);
 
   await tenantClient.$disconnect();
 

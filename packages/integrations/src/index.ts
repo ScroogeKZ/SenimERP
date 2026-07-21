@@ -81,7 +81,14 @@ export type NCALayerErrorCode =
   | 'CERT_REVOKED'
   | 'UNSUPPORTED_ALGORITHM'
   | 'REVOCATION_CHECK_FAILED'
+  | 'CONTENT_MISMATCH'
   | 'MOCK_ONLY';
+
+export interface NCALayerVerifyOptions {
+  originalData?: string;
+  expectedContent?: string;
+  now?: Date;
+}
 
 export class NCALayerVerificationError extends Error {
   constructor(public code: NCALayerErrorCode, message: string) {
@@ -135,7 +142,7 @@ export class NCALayerService {
    */
   static async verifySignature(
     signatureInput: string,
-    options?: { originalData?: string; now?: Date }
+    options?: NCALayerVerifyOptions
   ): Promise<ExtractedSignatureDetails> {
     if (!signatureInput || typeof signatureInput !== 'string') {
       throw new NCALayerVerificationError('INVALID_CMS_STRUCTURE', 'Signature input is empty or invalid.');
@@ -207,7 +214,7 @@ export class NCALayerService {
    */
   private static async verifyCmsSignature(
     base64Cms: string,
-    options?: { originalData?: string; now?: Date }
+    options?: NCALayerVerifyOptions
   ): Promise<ExtractedSignatureDetails> {
     const now = options?.now || new Date();
 
@@ -282,6 +289,39 @@ export class NCALayerService {
         throw new NCALayerVerificationError(
           'SIGNATURE_INVALID',
           'CMS signature cryptographic integrity check failed: signature does not match content or signer public key.'
+        );
+      }
+
+      // Step 7.1: Verify CMS eContent binding against expectedContent
+      if (!options?.expectedContent) {
+        throw new NCALayerVerificationError(
+          'CONTENT_MISMATCH',
+          'options.expectedContent parameter is required for CMS signature verification.'
+        );
+      }
+
+      let actualContentBuffer: Buffer | null = null;
+      if (signedData.encapContentInfo && signedData.encapContentInfo.eContent) {
+        const eContent = signedData.encapContentInfo.eContent as any;
+        if (typeof eContent.getValue === 'function') {
+          actualContentBuffer = Buffer.from(eContent.getValue());
+        } else if (eContent.valueBlock && eContent.valueBlock.valueHex) {
+          actualContentBuffer = Buffer.from(eContent.valueBlock.valueHex);
+        }
+      }
+
+      if (!actualContentBuffer) {
+        throw new NCALayerVerificationError(
+          'CONTENT_MISMATCH',
+          'CMS SignedData has no encapsulated eContent.'
+        );
+      }
+
+      const expectedBuffer = Buffer.from(options.expectedContent, 'utf8');
+      if (!actualContentBuffer.equals(expectedBuffer)) {
+        throw new NCALayerVerificationError(
+          'CONTENT_MISMATCH',
+          'Подписанное содержимое CMS не соответствует данным документа'
         );
       }
     } catch (err: any) {
