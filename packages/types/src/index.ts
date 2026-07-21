@@ -101,3 +101,18 @@ export interface ShipmentCompletedPayload {
   fulfillmentStatus: 'delivered';
   deliveredAt: string;
 }
+
+// Credit Note Issued Event Payload (ERP -> CRM)
+export interface CreditNoteIssuedPayload {
+  dealId: string;
+  creditNoteId: string;
+  creditNoteNumber: string;
+  rmaId: string;
+  customerId: string;
+  amount: number;
+  vatAmount: number;
+  currency: string;       // KZT
+  issuedAt: string;       // ISO timestamp
+  invoiceId?: string;
+}
+

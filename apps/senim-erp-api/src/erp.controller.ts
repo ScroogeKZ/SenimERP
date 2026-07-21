@@ -6,7 +6,7 @@ import { TenantPrismaService } from './prisma.service.js';
 import { EsfQueueService } from './esf-queue.service.js';
 import { NCALayerService } from '@senimerp/integrations';
 import { EventBusPublisher } from '@senimerp/event-bus-client';
-import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
+import { IntegrationEvent, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload, CreditNoteIssuedPayload } from '@senimerp/types';
 import crypto from 'crypto';
 import { buildSignaturePayload } from './signature-payload.js';
 
@@ -902,6 +902,38 @@ export class ErpController {
       });
     });
 
+    const rma = await db.rma.findUnique({
+      where: { id: updated.rmaId },
+      include: { waybill: true }
+    });
+    const dealId = rma?.waybill?.crmDealId;
+
+    let eventFired = false;
+    if (!dealId) {
+      console.log('[ERP API] CreditNote ' + updated.number + ' has no linked CRM deal, skipping sync event');
+    } else {
+      const creditNoteEvent: IntegrationEvent<CreditNoteIssuedPayload> = {
+        eventId: crypto.randomUUID(),
+        eventType: 'credit_note.issued',
+        tenantId: req.user.tenantId,
+        timestamp: new Date().toISOString(),
+        payload: {
+          dealId,
+          creditNoteId: id,
+          creditNoteNumber: updated.number,
+          rmaId: rma.id,
+          customerId: cn.customerId,
+          amount: Number(updated.amount),
+          vatAmount: Number(updated.vatAmount),
+          currency: 'KZT',
+          issuedAt: new Date().toISOString(),
+          invoiceId: updated.invoiceId || undefined
+        }
+      };
+      await this.publisher.publishEvent(creditNoteEvent);
+      eventFired = true;
+    }
+
     const esfDoc = await db.esfDocument.upsert({
       where: { creditNoteId: id },
       create: { creditNoteId: id, status: 'PENDING' },
@@ -915,7 +947,7 @@ export class ErpController {
       documentId: id
     });
 
-    console.log(`[ERP API] CreditNote ${updated.number} signed by ${certDetails.signedBy} (IIN: ${certDetails.iin})`);
+    console.log(`[ERP API] CreditNote ${updated.number} signed by ${certDetails.signedBy} (IIN: ${certDetails.iin})${eventFired ? ' - Fired credit_note.issued event' : ''}`);
     return db.creditNote.findUnique({
       where: { id },
       include: { customer: true, items: true, esfDocument: true, signature: true }
