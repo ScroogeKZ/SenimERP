@@ -56,38 +56,6 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
 
-    // Fetch TenantProfile for this tenant to get correct supplier metadata
-    let tenantProfile = await db.tenantProfile.findFirst();
-    if (!tenantProfile) {
-      tenantProfile = {
-        id: 'tenant_profile',
-        companyName: `Tenant ${tenantId}`,
-        companyBin: '990840001234',
-        legalAddress: 'г. Алматы, пр. Абая 150',
-        directorName: 'SENIM ERP',
-        directorIin: '950412345678',
-        updatedAt: new Date()
-      };
-    }
-
-    const isEsfMock = process.env.IS_ESF_MOCK !== 'false';
-    const isRealBin = tenantProfile.companyBin && tenantProfile.companyBin !== '000000000000';
-    if (!isEsfMock && !isRealBin) {
-      throw new Error('TenantProfile companyBin is not configured. Please set the tenant profile companyBin via PUT /api/tenant-profile.');
-    }
-
-    const supplierBin = isRealBin ? tenantProfile.companyBin : '990840001234';
-    const supplierName = tenantProfile.companyName && tenantProfile.companyName !== tenantId ? tenantProfile.companyName : 'SenimERP Tenant';
-    const supplierAddress = tenantProfile.legalAddress || 'г. Алматы, пр. Абая 150';
-    const directorIin = tenantProfile.directorIin || '950412345678';
-    const directorName = tenantProfile.directorName || 'SENIM ERP';
-
-    const supplier = {
-      bin: supplierBin,
-      name: supplierName,
-      address: supplierAddress
-    };
-
     const esfDoc = await db.esfDocument.findUnique({ where: { id: esfDocumentId } });
     if (!esfDoc) {
       console.error(`[EsfWorkerService] EsfDocument ${esfDocumentId} not found.`);
@@ -105,6 +73,27 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
+      // Fetch TenantProfile for this tenant to get correct supplier metadata
+      const tenantProfile = await db.tenantProfile.findFirst();
+      const isEsfMock = process.env.IS_ESF_MOCK !== 'false';
+
+      if (!isEsfMock && (!tenantProfile || !tenantProfile.companyBin || tenantProfile.companyBin === '000000000000')) {
+        throw new Error('TenantProfile is not configured. Please set it via PUT /api/tenant-profile before submitting to the production IS ESF endpoint.');
+      }
+
+      const isRealBin = !!(tenantProfile?.companyBin && tenantProfile.companyBin !== '000000000000');
+      const supplierBin = isRealBin ? tenantProfile!.companyBin : '990840001234';
+      const supplierName = tenantProfile?.companyName && tenantProfile.companyName !== tenantId ? tenantProfile.companyName : 'SenimERP Tenant';
+      const supplierAddress = tenantProfile?.legalAddress || 'г. Алматы, пр. Абая 150';
+      const directorIin = tenantProfile?.directorIin || '950412345678';
+      const directorName = tenantProfile?.directorName || 'SENIM ERP';
+
+      const supplier = {
+        bin: supplierBin,
+        name: supplierName,
+        address: supplierAddress
+      };
+
       let docData: EsfDocumentData | null = null;
       let existingSignedXml = '';
 

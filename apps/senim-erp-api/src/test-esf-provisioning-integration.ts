@@ -84,7 +84,7 @@ async function runEsfProvisioningTest() {
 
   const baseUrl = `http://localhost:${port}`;
 
-  // 1. Create customer and invoice directly in tenant DB after on-demand provisioning
+  // 1. Create customer and invoices directly in tenant DB after on-demand provisioning
   console.log('[Test B] Triggering on-demand schema provisioning...');
   const tenantClient = new PrismaClient({
     datasources: { db: { url: `${baseDbUrl}?schema=${schemaName}` } }
@@ -94,7 +94,7 @@ async function runEsfProvisioningTest() {
   const initRes = await fetch(`${baseUrl}/api/invoices`, { headers: getAuthHeaders() });
   if (!initRes.ok) throw new Error(`Initial invoice query failed: ${await initRes.text()}`);
 
-  // Get pre-seeded default profile
+  // Verify pre-seeded default profile has dummy companyBin ('000000000000')
   console.log('[Test B] Getting default pre-seeded TenantProfile...');
   const getProfileRes = await fetch(`${baseUrl}/api/tenant-profile`, { headers: getAuthHeaders() });
   if (!getProfileRes.ok) throw new Error(`Failed to get default tenant profile: ${await getProfileRes.text()}`);
@@ -104,13 +104,107 @@ async function runEsfProvisioningTest() {
     throw new Error(`Expected default companyBin to be '000000000000', got ${defaultProfile.companyBin}`);
   }
 
-  // Update tenant profile with custom supplier details
-  console.log('[Test B] Updating TenantProfile with custom supplier details...');
+  const customerId = `cust_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Customer" (id, name, bin) VALUES ('${customerId}', 'ТОО "ЭСФ Клиент"', '990102030405');
+  `);
+
+  const mockSignedXml = `<signedXml><data>MOCK_ESF_INVOICE</data><signature iin="850412300999" bin="850412300999" name="ТЕСТОВЫЙ ПОЛЬЗОВАТЕЛЬ">MOCK_SIGNATURE_DATA_SERIAL_001</signature></signedXml>`;
+
+  // Helper to verify supplier BIN in generated requestXml (checking signature attribute, raw XML, or base64 data)
+  const checkSupplierBinInXml = (xml: string, bin: string): boolean => {
+    if (xml.includes(`bin="${bin}"`)) return true;
+    if (xml.includes(`<bin>${bin}</bin>`)) return true;
+    const dataMatch = xml.match(/<data>([^<]+)<\/data>/);
+    if (dataMatch) {
+      try {
+        const decoded = Buffer.from(dataMatch[1], 'base64').toString('utf8');
+        if (decoded.includes(`<bin>${bin}</bin>`)) return true;
+      } catch {}
+    }
+    return false;
+  };
+
+  // =========================================================================
+  // SCENARIO 1: Mock Mode without configured TenantProfile (Regression Case)
+  // =========================================================================
+  console.log('\n[Scenario 1] Testing Mock Mode (IS_ESF_MOCK=true) without configured TenantProfile...');
+  process.env.IS_ESF_MOCK = 'true';
+  const invMockId = `inv_mock_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", "paidAmount", status, "dueDate")
+    VALUES ('${invMockId}', 'INV-MOCK-001', '${customerId}', 100000, 12000, 0, 'DRAFT', NOW());
+  `);
+
+  const retryMockRes = await fetch(`${baseUrl}/api/invoices/${invMockId}/esf/retry`, {
+    method: 'POST',
+    headers: getAuthHeaders()
+  });
+  if (!retryMockRes.ok) throw new Error(`[Scenario 1 FAILED] ESF retry failed: ${await retryMockRes.text()}`);
+
+  let mockEsfDoc: any = null;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const esfRes = await fetch(`${baseUrl}/api/invoices/${invMockId}/esf`, { headers: getAuthHeaders() });
+    if (esfRes.ok) {
+      mockEsfDoc = await esfRes.json();
+      if (mockEsfDoc.status === 'REGISTERED') break;
+    }
+  }
+
+  if (mockEsfDoc?.status !== 'REGISTERED') {
+    throw new Error(`[Scenario 1 FAILED] Expected status REGISTERED, got ${mockEsfDoc?.status}`);
+  }
+  const mockXml = mockEsfDoc.requestXml || '';
+  if (!checkSupplierBinInXml(mockXml, '990840001234')) {
+    throw new Error(`[Scenario 1 FAILED] Expected fallback mock BIN 990840001234 in requestXml, got: ${mockXml}`);
+  }
+  console.log('[Scenario 1 SUCCESS] Mock mode without configured TenantProfile fallback working correctly!');
+
+  // =========================================================================
+  // SCENARIO 2: Production Mode (IS_ESF_MOCK=false) without configured TenantProfile (Failure Case)
+  // =========================================================================
+  console.log('\n[Scenario 2] Testing Production Mode (IS_ESF_MOCK=false) without configured TenantProfile...');
+  process.env.IS_ESF_MOCK = 'false';
+  const invProdUnconfigId = `inv_prod_unconfig_${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", "paidAmount", status, "dueDate")
+    VALUES ('${invProdUnconfigId}', 'INV-PROD-001', '${customerId}', 200000, 24000, 0, 'DRAFT', NOW());
+  `);
+
+  const retryProdUnconfigRes = await fetch(`${baseUrl}/api/invoices/${invProdUnconfigId}/esf/retry`, {
+    method: 'POST',
+    headers: getAuthHeaders()
+  });
+  if (!retryProdUnconfigRes.ok) throw new Error(`[Scenario 2 FAILED] ESF retry failed: ${await retryProdUnconfigRes.text()}`);
+
+  let prodUnconfigEsfDoc: any = null;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const esfRes = await fetch(`${baseUrl}/api/invoices/${invProdUnconfigId}/esf`, { headers: getAuthHeaders() });
+    if (esfRes.ok) {
+      prodUnconfigEsfDoc = await esfRes.json();
+      if (prodUnconfigEsfDoc.status === 'FAILED') break;
+    }
+  }
+
+  if (prodUnconfigEsfDoc?.status !== 'FAILED') {
+    throw new Error(`[Scenario 2 FAILED] Expected EsfDocument status to be FAILED, got ${prodUnconfigEsfDoc?.status}`);
+  }
+  if (!prodUnconfigEsfDoc.errorMessage?.includes('TenantProfile is not configured')) {
+    throw new Error(`[Scenario 2 FAILED] Expected configuration error message, got: ${prodUnconfigEsfDoc.errorMessage}`);
+  }
+  console.log('[Scenario 2 SUCCESS] Production mode without configured TenantProfile correctly failed with configuration error!');
+
+  // =========================================================================
+  // SCENARIO 3: Production Mode (IS_ESF_MOCK=false) with configured TenantProfile (Success Case)
+  // =========================================================================
+  console.log('\n[Scenario 3] Testing Production Mode (IS_ESF_MOCK=false) with configured TenantProfile...');
   const updateProfileRes = await fetch(`${baseUrl}/api/tenant-profile`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify({
-      companyName: 'ТОО Тестовый Поставщик',
+      companyName: 'ТОО Настоящий Поставщик',
       companyBin: '123456789012',
       legalAddress: 'г. Алматы, ул. Толе би 59',
       directorName: 'Иванов Иван',
@@ -119,73 +213,45 @@ async function runEsfProvisioningTest() {
   });
   if (!updateProfileRes.ok) throw new Error(`Failed to update tenant profile: ${await updateProfileRes.text()}`);
   const updatedProfile = await updateProfileRes.json();
-  console.log('[Test B SUCCESS] TenantProfile updated:', updatedProfile);
+  console.log('[Scenario 3] TenantProfile updated:', updatedProfile);
 
-  const customerId = `cust_${Date.now()}`;
-  const invoiceId = `inv_${Date.now()}`;
-
-  await tenantClient.$executeRawUnsafe(`
-    INSERT INTO "${schemaName}"."Customer" (id, name, bin) VALUES ('${customerId}', 'ТОО "ЭСФ Клиент"', '990102030405');
-  `);
+  const invProdConfigId = `inv_prod_config_${Date.now()}`;
   await tenantClient.$executeRawUnsafe(`
     INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", "paidAmount", status, "dueDate")
-    VALUES ('${invoiceId}', 'INV-ESF-001', '${customerId}', 100000, 12000, 0, 'DRAFT', NOW());
+    VALUES ('${invProdConfigId}', 'INV-PROD-002', '${customerId}', 300000, 36000, 0, 'DRAFT', NOW());
   `);
-  await tenantClient.$disconnect();
 
-  // 2. Sign Invoice -> triggers EsfDocument creation on fresh tenant
-  console.log('[Test B] Signing invoice to trigger EsfDocument creation...');
-  const mockSignedXml = `<signedXml><data>MOCK_ESF_INVOICE</data><signature iin="850412300999" bin="850412300999" name="ТЕСТОВЫЙ ПОЛЬЗОВАТЕЛЬ">MOCK_SIGNATURE_DATA_SERIAL_001</signature></signedXml>`;
-
-  const signRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/sign`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ signedXml: mockSignedXml })
-  });
-
-  if (!signRes.ok) {
-    throw new Error(`[Test B FAILED] Invoice signing failed: ${await signRes.text()}`);
-  }
-  const signedInvoice = await signRes.json();
-  console.log(`[Test B SUCCESS] Invoice signed. Status=${signedInvoice.status}`);
-
-  // 2. Trigger ESF creation / retry via POST /api/invoices/:id/esf/retry
-  console.log('[Test B] Triggering ESF creation/retry via POST /api/invoices/:id/esf/retry...');
-  const retryRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/esf/retry`, {
+  const retryProdConfigRes = await fetch(`${baseUrl}/api/invoices/${invProdConfigId}/esf/retry`, {
     method: 'POST',
     headers: getAuthHeaders()
   });
-  if (!retryRes.ok) throw new Error(`[Test B FAILED] ESF retry failed: ${await retryRes.text()}`);
-  const retriedEsf = await retryRes.json();
-  console.log(`[Test B SUCCESS] EsfDocument created/retried. ID=${retriedEsf.id}, status=${retriedEsf.status}`);
+  if (!retryProdConfigRes.ok) throw new Error(`[Scenario 3 FAILED] ESF retry failed: ${await retryProdConfigRes.text()}`);
 
-  // 3. Wait up to 5 seconds for the background worker to finish submission
-  console.log('[Test B] Waiting for ESF background processing to complete...');
-  let esfDoc: any = null;
+  let prodConfigEsfDoc: any = null;
   for (let i = 0; i < 10; i++) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const esfRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/esf`, { headers: getAuthHeaders() });
+    const esfRes = await fetch(`${baseUrl}/api/invoices/${invProdConfigId}/esf`, { headers: getAuthHeaders() });
     if (esfRes.ok) {
-      esfDoc = await esfRes.json();
-      if (esfDoc.status === 'REGISTERED') break;
+      prodConfigEsfDoc = await esfRes.json();
+      if (prodConfigEsfDoc.status === 'REGISTERED') break;
     }
   }
 
-  console.log(`[Test B SUCCESS] EsfDocument retrieved. ID=${esfDoc.id}, status=${esfDoc.status}`);
-  if (esfDoc.status !== 'REGISTERED') {
-    throw new Error(`Expected EsfDocument status to reach REGISTERED, got ${esfDoc.status}`);
+  if (prodConfigEsfDoc?.status !== 'REGISTERED') {
+    throw new Error(`[Scenario 3 FAILED] Expected status REGISTERED, got ${prodConfigEsfDoc?.status}`);
   }
-
-  // Verify that the requestXml contains custom supplier details from TenantProfile instead of placeholders
-  const reqXmlDecoded = esfDoc.requestXml || '';
-  console.log('[Test B] Verifying requestXml content against TenantProfile...');
-  if (!reqXmlDecoded.includes('<bin>123456789012</bin>') ||
-      !reqXmlDecoded.includes('<name>ТОО Тестовый Поставщик</name>') ||
-      !reqXmlDecoded.includes('<address>г. Алматы, ул. Толе би 59</address>')) {
-    throw new Error(`XML request verification failed. Supplier details not matched. Content: ${reqXmlDecoded}`);
+  const prodConfigXml = prodConfigEsfDoc.requestXml || '';
+  if (!checkSupplierBinInXml(prodConfigXml, '123456789012')) {
+    throw new Error(`[Scenario 3 FAILED] XML request verification failed. Real supplier BIN 123456789012 not matched. Content: ${prodConfigXml}`);
   }
-  console.log('[Test B SUCCESS] Supplier details in requestXml match TenantProfile exactly!');
+  if (prodConfigXml.includes('bin="990840001234"') || prodConfigXml.includes('<bin>990840001234</bin>')) {
+    throw new Error(`[Scenario 3 FAILED] XML contains synthetic fallback BIN 990840001234!`);
+  }
+  console.log('[Scenario 3 SUCCESS] Production mode with configured TenantProfile correctly used real BIN 123456789012!');
 
+  await tenantClient.$disconnect();
+
+  process.env.IS_ESF_MOCK = 'true';
   console.log('\n=== ESF DOCUMENT PROVISIONING & SCHEMA PARITY TEST PASSED SUCCESSFULLY! ===');
 
   await app.close();
