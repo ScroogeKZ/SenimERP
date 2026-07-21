@@ -1,6 +1,32 @@
 import { Controller, Get, Param, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
+import * as crypto from 'crypto';
 import { TenantPrismaService } from './prisma.service.js';
+
+/**
+ * Calculates deterministic HMAC-SHA256 token for Kaspi catalog export URL.
+ * Formula: token = HMAC-SHA256(MARKETPLACE_CATALOG_SECRET, `${tenantId}:${accountId}`), in hex.
+ */
+export function calculateKaspiCatalogToken(tenantId: string, accountId: string, customSecret?: string): string {
+  const secret = customSecret || process.env.MARKETPLACE_CATALOG_SECRET || 'senim-marketplace-catalog-secret-2026';
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${tenantId}:${accountId}`)
+    .digest('hex');
+}
+
+/**
+ * Constant-time comparison to prevent timing attacks.
+ */
+function safeTimingSafeEqual(provided: string, expected: string): boolean {
+  const bufProvided = Buffer.from(provided, 'utf-8');
+  const bufExpected = Buffer.from(expected, 'utf-8');
+
+  if (bufProvided.length !== bufExpected.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufProvided, bufExpected);
+}
 
 function escapeXml(str: string): string {
   if (!str) return '';
@@ -80,15 +106,23 @@ export class MarketplaceController {
   /**
    * Public Kaspi.kz XML Catalog Export Endpoint.
    * Kaspi polls this URL periodically without SSO Bearer tokens.
+   * Secured via deterministic HMAC token in query params.
    */
   @Get('kaspi/:accountId/catalog.xml')
   async getKaspiCatalog(
     @Param('accountId') accountId: string,
     @Query('warehouseId') warehouseIdQuery: string | undefined,
     @Query('tenantId') tenantIdQuery: string | undefined,
+    @Query('token') tokenQuery: string | undefined,
     @Res() res: Response
   ) {
     const tenantId = tenantIdQuery || 'tenant_default';
+
+    if (!tokenQuery || !safeTimingSafeEqual(tokenQuery, calculateKaspiCatalogToken(tenantId, accountId))) {
+      res.status(403).send();
+      return;
+    }
+
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
 

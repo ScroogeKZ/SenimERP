@@ -3,6 +3,7 @@ import { AppModule } from './app.module.js';
 import { TenantPrismaService } from './prisma.service.js';
 import { EventConsumerService } from './event-consumer.service.js';
 import { IntegrationEvent } from '@senimerp/types';
+import { calculateKaspiCatalogToken } from './marketplace.controller.js';
 
 async function runMarketplaceIntegrationTests() {
   console.log('=== Starting SenimERP Marketplace Integration Tests ===');
@@ -75,8 +76,27 @@ async function runMarketplaceIntegrationTests() {
     // -------------------------------------------------------------
     // Test 1: GET /api/marketplace/kaspi/:accountId/catalog.xml
     // -------------------------------------------------------------
-    console.log('\n[Test 1/5] Testing Kaspi.kz XML Catalog Export...');
-    const catalogUrl = `${baseUrl}/api/marketplace/kaspi/${accountId}/catalog.xml?tenantId=${testTenantId}&warehouseId=${warehouseId}`;
+    console.log('\n[Test 1/5] Testing Kaspi.kz XML Catalog Export & HMAC Token Security...');
+    
+    // Sub-test 1a: Request WITHOUT token -> 403 Forbidden
+    const noTokenUrl = `${baseUrl}/api/marketplace/kaspi/${accountId}/catalog.xml?tenantId=${testTenantId}&warehouseId=${warehouseId}`;
+    const noTokenRes = await fetch(noTokenUrl);
+    if (noTokenRes.status !== 403) {
+      throw new Error(`Expected HTTP 403 for request without token, got ${noTokenRes.status}`);
+    }
+    console.log('[Test 1a SUCCESS] Missing token correctly rejected with 403 Forbidden.');
+
+    // Sub-test 1b: Request WITH INVALID token -> 403 Forbidden
+    const invalidTokenUrl = `${baseUrl}/api/marketplace/kaspi/${accountId}/catalog.xml?tenantId=${testTenantId}&warehouseId=${warehouseId}&token=invalid_hmac_token_12345`;
+    const invalidTokenRes = await fetch(invalidTokenUrl);
+    if (invalidTokenRes.status !== 403) {
+      throw new Error(`Expected HTTP 403 for request with invalid token, got ${invalidTokenRes.status}`);
+    }
+    console.log('[Test 1b SUCCESS] Invalid token correctly rejected with 403 Forbidden.');
+
+    // Sub-test 1c: Request WITH VALID token -> 200 OK & XML content
+    const validToken = calculateKaspiCatalogToken(testTenantId, accountId);
+    const catalogUrl = `${baseUrl}/api/marketplace/kaspi/${accountId}/catalog.xml?tenantId=${testTenantId}&warehouseId=${warehouseId}&token=${validToken}`;
     const catalogRes = await fetch(catalogUrl);
 
     if (!catalogRes.ok) {
@@ -89,7 +109,7 @@ async function runMarketplaceIntegrationTests() {
     }
 
     const xmlText = await catalogRes.text();
-    console.log('[Test 1] Generated Catalog XML Preview:\n' + xmlText.substring(0, 400) + '...\n');
+    console.log('[Test 1c] Generated Catalog XML Preview:\n' + xmlText.substring(0, 400) + '...\n');
 
     if (!xmlText.includes('<kaspi_catalog')) {
       throw new Error('XML root tag <kaspi_catalog> missing');
@@ -109,7 +129,7 @@ async function runMarketplaceIntegrationTests() {
     if (!xmlText.includes('available="yes"')) {
       throw new Error('Expected available="yes" in XML');
     }
-    console.log('[Test 1 SUCCESS] Kaspi XML Catalog verified successfully.');
+    console.log('[Test 1 SUCCESS] Kaspi XML Catalog HMAC protection verified successfully.');
 
     // -------------------------------------------------------------
     // Test 2: Order Received WITH BIN & requiresEsf: true
