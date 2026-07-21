@@ -94,6 +94,33 @@ async function runEsfProvisioningTest() {
   const initRes = await fetch(`${baseUrl}/api/invoices`, { headers: getAuthHeaders() });
   if (!initRes.ok) throw new Error(`Initial invoice query failed: ${await initRes.text()}`);
 
+  // Get pre-seeded default profile
+  console.log('[Test B] Getting default pre-seeded TenantProfile...');
+  const getProfileRes = await fetch(`${baseUrl}/api/tenant-profile`, { headers: getAuthHeaders() });
+  if (!getProfileRes.ok) throw new Error(`Failed to get default tenant profile: ${await getProfileRes.text()}`);
+  const defaultProfile = await getProfileRes.json();
+  console.log('[Test B SUCCESS] Default profile found:', defaultProfile);
+  if (defaultProfile.companyBin !== '000000000000') {
+    throw new Error(`Expected default companyBin to be '000000000000', got ${defaultProfile.companyBin}`);
+  }
+
+  // Update tenant profile with custom supplier details
+  console.log('[Test B] Updating TenantProfile with custom supplier details...');
+  const updateProfileRes = await fetch(`${baseUrl}/api/tenant-profile`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      companyName: 'ТОО Тестовый Поставщик',
+      companyBin: '123456789012',
+      legalAddress: 'г. Алматы, ул. Толе би 59',
+      directorName: 'Иванов Иван',
+      directorIin: '123456789012'
+    })
+  });
+  if (!updateProfileRes.ok) throw new Error(`Failed to update tenant profile: ${await updateProfileRes.text()}`);
+  const updatedProfile = await updateProfileRes.json();
+  console.log('[Test B SUCCESS] TenantProfile updated:', updatedProfile);
+
   const customerId = `cust_${Date.now()}`;
   const invoiceId = `inv_${Date.now()}`;
 
@@ -132,15 +159,32 @@ async function runEsfProvisioningTest() {
   const retriedEsf = await retryRes.json();
   console.log(`[Test B SUCCESS] EsfDocument created/retried. ID=${retriedEsf.id}, status=${retriedEsf.status}`);
 
-  // 3. Query ESF document status GET /api/invoices/:id/esf
-  console.log('[Test B] Fetching ESF document status via GET /api/invoices/:id/esf...');
-  const esfRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/esf`, { headers: getAuthHeaders() });
-  if (!esfRes.ok) throw new Error(`GET /api/invoices/${invoiceId}/esf failed: ${await esfRes.text()}`);
-  const esfDoc = await esfRes.json();
-  console.log(`[Test B SUCCESS] EsfDocument retrieved. ID=${esfDoc.id}, status=${esfDoc.status}`);
-  if (!['PENDING', 'SUBMITTED', 'REGISTERED'].includes(esfDoc.status)) {
-    throw new Error(`Expected valid EsfDocument status (PENDING/SUBMITTED/REGISTERED), got ${esfDoc.status}`);
+  // 3. Wait up to 5 seconds for the background worker to finish submission
+  console.log('[Test B] Waiting for ESF background processing to complete...');
+  let esfDoc: any = null;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const esfRes = await fetch(`${baseUrl}/api/invoices/${invoiceId}/esf`, { headers: getAuthHeaders() });
+    if (esfRes.ok) {
+      esfDoc = await esfRes.json();
+      if (esfDoc.status === 'REGISTERED') break;
+    }
   }
+
+  console.log(`[Test B SUCCESS] EsfDocument retrieved. ID=${esfDoc.id}, status=${esfDoc.status}`);
+  if (esfDoc.status !== 'REGISTERED') {
+    throw new Error(`Expected EsfDocument status to reach REGISTERED, got ${esfDoc.status}`);
+  }
+
+  // Verify that the requestXml contains custom supplier details from TenantProfile instead of placeholders
+  const reqXmlDecoded = esfDoc.requestXml || '';
+  console.log('[Test B] Verifying requestXml content against TenantProfile...');
+  if (!reqXmlDecoded.includes('<bin>123456789012</bin>') ||
+      !reqXmlDecoded.includes('<name>ТОО Тестовый Поставщик</name>') ||
+      !reqXmlDecoded.includes('<address>г. Алматы, ул. Толе би 59</address>')) {
+    throw new Error(`XML request verification failed. Supplier details not matched. Content: ${reqXmlDecoded}`);
+  }
+  console.log('[Test B SUCCESS] Supplier details in requestXml match TenantProfile exactly!');
 
   console.log('\n=== ESF DOCUMENT PROVISIONING & SCHEMA PARITY TEST PASSED SUCCESSFULLY! ===');
 

@@ -10,7 +10,7 @@ import { EsfSubmissionJobPayload } from './esf-queue.service.js';
 @Injectable()
 export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
   private worker!: Worker;
-  private soapClient = new EsfSoapClient(true); // Default to mock SOAP client
+  private soapClient = new EsfSoapClient(); // Default to environment-driven SOAP client
   private pollingTimer?: NodeJS.Timeout;
 
   constructor(private readonly prismaService: TenantPrismaService) {}
@@ -56,6 +56,38 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
 
+    // Fetch TenantProfile for this tenant to get correct supplier metadata
+    let tenantProfile = await db.tenantProfile.findFirst();
+    if (!tenantProfile) {
+      tenantProfile = {
+        id: 'tenant_profile',
+        companyName: `Tenant ${tenantId}`,
+        companyBin: '990840001234',
+        legalAddress: 'г. Алматы, пр. Абая 150',
+        directorName: 'SENIM ERP',
+        directorIin: '950412345678',
+        updatedAt: new Date()
+      };
+    }
+
+    const isEsfMock = process.env.IS_ESF_MOCK !== 'false';
+    const isRealBin = tenantProfile.companyBin && tenantProfile.companyBin !== '000000000000';
+    if (!isEsfMock && !isRealBin) {
+      throw new Error('TenantProfile companyBin is not configured. Please set the tenant profile companyBin via PUT /api/tenant-profile.');
+    }
+
+    const supplierBin = isRealBin ? tenantProfile.companyBin : '990840001234';
+    const supplierName = tenantProfile.companyName && tenantProfile.companyName !== tenantId ? tenantProfile.companyName : 'SenimERP Tenant';
+    const supplierAddress = tenantProfile.legalAddress || 'г. Алматы, пр. Абая 150';
+    const directorIin = tenantProfile.directorIin || '950412345678';
+    const directorName = tenantProfile.directorName || 'SENIM ERP';
+
+    const supplier = {
+      bin: supplierBin,
+      name: supplierName,
+      address: supplierAddress
+    };
+
     const esfDoc = await db.esfDocument.findUnique({ where: { id: esfDocumentId } });
     if (!esfDoc) {
       console.error(`[EsfWorkerService] EsfDocument ${esfDocumentId} not found.`);
@@ -89,11 +121,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
           documentId: waybill.id,
           documentNumber: waybill.number,
           turnoverDate: waybill.issueDate.toISOString().split('T')[0],
-          supplier: {
-            bin: '990840001234',
-            name: 'SenimERP Tenant',
-            address: 'г. Алматы, пр. Абая 150'
-          },
+          supplier,
           customer: {
             bin: waybill.customer.bin,
             name: waybill.customer.name,
@@ -124,11 +152,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
           documentId: act.id,
           documentNumber: act.number,
           turnoverDate: act.issueDate.toISOString().split('T')[0],
-          supplier: {
-            bin: '990840001234',
-            name: 'SenimERP Tenant',
-            address: 'г. Алматы, пр. Абая 150'
-          },
+          supplier,
           customer: {
             bin: act.customer.bin,
             name: act.customer.name,
@@ -159,11 +183,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
           documentId: invoice.id,
           documentNumber: invoice.number,
           turnoverDate: invoice.issueDate.toISOString().split('T')[0],
-          supplier: {
-            bin: '990840001234',
-            name: 'SenimERP Tenant',
-            address: 'г. Алматы, пр. Абая 150'
-          },
+          supplier,
           customer: {
             bin: invoice.customer.bin,
             name: invoice.customer.name,
@@ -194,11 +214,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
           documentId: creditNote.id,
           documentNumber: creditNote.number,
           turnoverDate: creditNote.issueDate.toISOString().split('T')[0],
-          supplier: {
-            bin: '990840001234',
-            name: 'SenimERP Tenant',
-            address: 'г. Алматы, пр. Абая 150'
-          },
+          supplier,
           customer: {
             bin: creditNote.customer.bin,
             name: creditNote.customer.name,
@@ -224,7 +240,7 @@ export class EsfWorkerService implements OnModuleInit, OnModuleDestroy {
       const rawXml = EsfXmlGenerator.generateXml(docData);
 
       // 2. Wrap/Sign with digital signature
-      const signedXml = existingSignedXml || `<signedXml><data>${Buffer.from(rawXml).toString('base64')}</data><signature bin="990840001234" iin="950412345678" name="SENIM ERP">MOCK_ESF_SIGNATURE</signature></signedXml>`;
+      const signedXml = existingSignedXml || `<signedXml><data>${Buffer.from(rawXml).toString('base64')}</data><signature bin="${supplierBin}" iin="${directorIin}" name="${directorName}">MOCK_ESF_SIGNATURE</signature></signedXml>`;
 
       // 3. Submit via SOAP client
       const result = await this.soapClient.submitEsf(signedXml);

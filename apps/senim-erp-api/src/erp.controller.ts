@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException } from '@nestjs/common';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { Roles } from './roles.decorator.js';
@@ -2505,6 +2505,63 @@ export class ErpController {
       discountGivenThisMonth: Number(discountGivenThisMonth.toFixed(2)),
       currencyExposureCurrencies
     };
+  }
+
+  // --- Tenant Profile ---
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_PURCHASER', 'ERP_CEO')
+  @Get('tenant-profile')
+  async getTenantProfile(@Req() req: RequestWithUser) {
+    const db = await this.getDb(req);
+    const profile = await db.tenantProfile.findFirst();
+    if (!profile) {
+      throw new NotFoundException('Tenant profile not found');
+    }
+    return profile;
+  }
+
+  @Roles('ERP_ACCOUNTANT', 'ERP_CEO')
+  @Put('tenant-profile')
+  async updateTenantProfile(
+    @Req() req: RequestWithUser,
+    @Body() body: {
+      companyName?: string;
+      companyBin?: string;
+      legalAddress?: string;
+      directorName?: string;
+      directorIin?: string;
+    }
+  ) {
+    const db = await this.getDb(req);
+    const profile = await db.tenantProfile.findFirst();
+    
+    if (!body.companyName || !body.companyBin) {
+      throw new BadRequestException('companyName and companyBin are required');
+    }
+
+    if (profile) {
+      return db.tenantProfile.update({
+        where: { id: profile.id },
+        data: {
+          companyName: body.companyName,
+          companyBin: body.companyBin,
+          legalAddress: body.legalAddress,
+          directorName: body.directorName,
+          directorIin: body.directorIin
+        }
+      });
+    } else {
+      return db.tenantProfile.create({
+        data: {
+          id: 'tenant_profile',
+          companyName: body.companyName,
+          companyBin: body.companyBin,
+          legalAddress: body.legalAddress,
+          directorName: body.directorName,
+          directorIin: body.directorIin
+        }
+      });
+    }
   }
 }
 

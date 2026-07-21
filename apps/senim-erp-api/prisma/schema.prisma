@@ -434,5 +434,15 @@ model CreditNoteLineItem {
   totalAmount  Decimal    @db.Decimal(15, 2)
 }
 
+model TenantProfile {
+  id           String   @id @default("tenant_profile")
+  companyName  String
+  companyBin   String
+  legalAddress String?
+  directorName String?
+  directorIin  String?
+  updatedAt    DateTime @updatedAt
+}
+
 
 

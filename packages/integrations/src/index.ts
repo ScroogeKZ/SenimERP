@@ -600,8 +600,28 @@ export interface EsfStatusCheckResult {
 export class EsfSoapClient {
   private isMock: boolean;
 
-  constructor(isMock: boolean = true) {
-    this.isMock = isMock;
+  constructor(isMock?: boolean) {
+    if (isMock !== undefined) {
+      this.isMock = isMock;
+    } else {
+      this.isMock = process.env.IS_ESF_MOCK !== 'false';
+    }
+  }
+
+  static get esfWsdlUrl(): string | undefined {
+    return process.env.ESF_WSDL_URL;
+  }
+
+  static get esfEndpointUrl(): string | undefined {
+    return process.env.ESF_ENDPOINT_URL;
+  }
+
+  static get esfAuthCertPath(): string | undefined {
+    return process.env.ESF_AUTH_CERT_PATH;
+  }
+
+  static get esfAuthKeyPath(): string | undefined {
+    return process.env.ESF_AUTH_KEY_PATH;
   }
 
   /**
@@ -621,7 +641,15 @@ export class EsfSoapClient {
       };
     }
 
-    throw new Error('Production KGD SOAP endpoint not configured. Set IS_ESF_MOCK=true.');
+    if (!EsfSoapClient.esfWsdlUrl) {
+      throw new Error(
+        'Production IS ESF SOAP client error: ESF_WSDL_URL is not configured. Set IS_ESF_MOCK=true for mock mode.'
+      );
+    }
+
+    throw new Error(
+      `Production IS ESF SOAP client not fully initialized: WSDL at ${EsfSoapClient.esfWsdlUrl} could not be connected. (mTLS Cert: ${EsfSoapClient.esfAuthCertPath || 'not configured'}).`
+    );
   }
 
   /**
@@ -640,7 +668,15 @@ export class EsfSoapClient {
       };
     }
 
-    throw new Error('Production KGD SOAP endpoint not configured.');
+    if (!EsfSoapClient.esfWsdlUrl) {
+      throw new Error(
+        'Production IS ESF SOAP client error: ESF_WSDL_URL is not configured. Set IS_ESF_MOCK=true for mock mode.'
+      );
+    }
+
+    throw new Error(
+      `Production IS ESF SOAP client status check not fully initialized (WSDL: ${EsfSoapClient.esfWsdlUrl}).`
+    );
   }
 }
 

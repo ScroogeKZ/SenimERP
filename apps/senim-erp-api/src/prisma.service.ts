@@ -409,6 +409,24 @@ export class TenantPrismaService implements OnModuleDestroy {
               );
             `);
 
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."TenantProfile" (
+                "id" TEXT PRIMARY KEY DEFAULT 'tenant_profile',
+                "companyName" TEXT NOT NULL,
+                "companyBin" TEXT NOT NULL,
+                "legalAddress" TEXT,
+                "directorName" TEXT,
+                "directorIin" TEXT,
+                "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
+
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "${schema}"."TenantProfile" ("id", "companyName", "companyBin")
+              VALUES ('tenant_profile', '${tenantId}', '000000000000')
+              ON CONFLICT ("id") DO NOTHING;
+            `);
+
             // 4. Create sequences for monotonic document numbering
             await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."invoice_number_seq";`);
             await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS "${schema}"."waybill_number_seq";`);
