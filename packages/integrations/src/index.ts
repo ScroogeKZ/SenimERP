@@ -48,6 +48,17 @@ export class EncryptionService {
 
 import fs from 'fs';
 import forge from 'node-forge';
+import * as pkijs from 'pkijs';
+import * as asn1js from 'asn1js';
+
+// Initialize pkijs CryptoEngine with Node.js native WebCrypto (Node >= 20)
+const webcrypto = crypto.webcrypto as unknown as Crypto;
+const pkijsEngine = new pkijs.CryptoEngine({
+  name: 'node-webcrypto',
+  crypto: webcrypto,
+  subtle: webcrypto.subtle
+});
+pkijs.setEngine('node-webcrypto', webcrypto, pkijsEngine);
 
 export interface ExtractedSignatureDetails {
   iin: string;
@@ -250,24 +261,35 @@ export class NCALayerService {
     const { iin, bin, signedBy } = this.extractSubjectAttributes(cert);
     const certSerial = cert.serialNumber || crypto.createHash('sha256').update(cert.publicKey.toString()).digest('hex').substring(0, 16);
 
-    // Step 7: Cryptographic Signature Verification
-    if (options?.originalData && p7.content) {
-      const dataBytes = options.originalData;
-      // Compare content digest if detached content provided
-    }
-
+    // Step 7: Cryptographic Signature Verification using pkijs WebCrypto
     try {
-      // Forge PKCS#7 signature verification
-      const verified = (p7 as any).verify();
-      if (!verified) {
-        throw new NCALayerVerificationError('SIGNATURE_INVALID', 'CMS signature cryptographic integrity check failed.');
+      const cmsBuffer = Buffer.from(base64Cms, 'base64');
+      const cmsArrayBuffer = cmsBuffer.buffer.slice(cmsBuffer.byteOffset, cmsBuffer.byteOffset + cmsBuffer.byteLength);
+      const asn1Parsed = asn1js.fromBER(cmsArrayBuffer);
+      if (asn1Parsed.offset === -1) {
+        throw new NCALayerVerificationError('INVALID_CMS_STRUCTURE', 'Failed to parse BER/DER encoding of CMS for cryptographic verification.');
+      }
+      const contentInfo = new pkijs.ContentInfo({ schema: asn1Parsed.result });
+      if (contentInfo.contentType !== '1.2.840.113549.1.7.2') {
+        throw new NCALayerVerificationError('INVALID_CMS_STRUCTURE', `CMS ContentInfo contentType is not SignedData (got: ${contentInfo.contentType}).`);
+      }
+      const signedData = new pkijs.SignedData({ schema: contentInfo.content });
+      const verifyResult = await signedData.verify({
+        signer: 0,
+        checkChain: false
+      });
+      if (!verifyResult) {
+        throw new NCALayerVerificationError(
+          'SIGNATURE_INVALID',
+          'CMS signature cryptographic integrity check failed: signature does not match content or signer public key.'
+        );
       }
     } catch (err: any) {
       if (err instanceof NCALayerVerificationError) throw err;
-      // Fallback verification check: ensure public key matches cert
-      if (!cert.publicKey) {
-        throw new NCALayerVerificationError('SIGNATURE_INVALID', 'Failed to verify cryptographic signature: missing public key.');
-      }
+      throw new NCALayerVerificationError(
+        'SIGNATURE_INVALID',
+        `Cryptographic signature verification failed: ${err.message}`
+      );
     }
 
     // Step 8: Certificate Chain Verification against NUC RK Root CA
@@ -399,58 +421,76 @@ export class NCALayerService {
 
   /**
    * Verifies certificate chain against NUC RK Root CA certificate.
+   * Fail-closed: in production mode, missing configuration is an error.
    */
   private static async verifyTrustChain(cert: forge.pki.Certificate): Promise<void> {
-    if (this.rootCertRsaPath && fs.existsSync(this.rootCertRsaPath)) {
-      try {
-        const caPem = fs.readFileSync(this.rootCertRsaPath, 'utf8');
-        const caCert = forge.pki.certificateFromPem(caPem);
-        const caStore = forge.pki.createCaStore([caCert]);
-        const verified = forge.pki.verifyCertificateChain(caStore, [cert]);
-        if (!verified) {
-          throw new NCALayerVerificationError('CHAIN_UNTRUSTED', 'Certificate trust chain verification failed against NUC RK Root CA.');
-        }
-      } catch (e: any) {
-        if (e instanceof NCALayerVerificationError) throw e;
-        throw new NCALayerVerificationError('CHAIN_UNTRUSTED', `Failed to verify trust chain against CA: ${e.message}`);
+    if (!this.rootCertRsaPath || !fs.existsSync(this.rootCertRsaPath)) {
+      if (!this.isMock) {
+        throw new NCALayerVerificationError(
+          'CHAIN_UNTRUSTED',
+          'NCA_ROOT_CERT_RSA_PATH is not configured or file not found — cannot verify certificate trust chain in production mode.'
+        );
       }
+      return; // mock mode: skip trust chain verification
+    }
+
+    try {
+      const caPem = fs.readFileSync(this.rootCertRsaPath, 'utf8');
+      const caCert = forge.pki.certificateFromPem(caPem);
+      const caStore = forge.pki.createCaStore([caCert]);
+      const verified = forge.pki.verifyCertificateChain(caStore, [cert]);
+      if (!verified) {
+        throw new NCALayerVerificationError('CHAIN_UNTRUSTED', 'Certificate trust chain verification failed against NUC RK Root CA.');
+      }
+    } catch (e: any) {
+      if (e instanceof NCALayerVerificationError) throw e;
+      throw new NCALayerVerificationError('CHAIN_UNTRUSTED', `Failed to verify trust chain against CA: ${e.message}`);
     }
   }
 
   /**
    * Revocation check via OCSP/CRL (Fail-closed policy).
+   * In production mode, missing OCSP/CRL configuration is an error.
    */
   private static async checkRevocationStatus(cert: forge.pki.Certificate): Promise<void> {
-    if (this.ocspUrl || this.crlUrl) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.revocationTimeoutMs);
-
-      try {
-        const targetUrl = this.ocspUrl || this.crlUrl!;
-        const response = await fetch(targetUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/ocsp-request' },
-          body: cert.serialNumber,
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-          throw new NCALayerVerificationError('REVOCATION_CHECK_FAILED', `OCSP/CRL service returned HTTP status ${response.status}`);
-        }
-
-        const text = await response.text();
-        if (text.includes('REVOKED')) {
-          throw new NCALayerVerificationError('CERT_REVOKED', 'Signer certificate has been REVOKED according to NUC RK OCSP/CRL service.');
-        }
-      } catch (err: any) {
-        clearTimeout(timeout);
-        if (err instanceof NCALayerVerificationError) throw err;
+    if (!this.ocspUrl && !this.crlUrl) {
+      if (!this.isMock) {
         throw new NCALayerVerificationError(
           'REVOCATION_CHECK_FAILED',
-          `Revocation check failed (fail-closed policy): ${err.name === 'AbortError' ? 'OCSP service request timed out' : err.message}`
+          'NCA_OCSP_URL and NCA_CRL_URL are not configured — cannot verify certificate revocation status in production mode.'
         );
       }
+      return; // mock mode: skip revocation check
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.revocationTimeoutMs);
+
+    try {
+      const targetUrl = this.ocspUrl || this.crlUrl!;
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/ocsp-request' },
+        body: cert.serialNumber,
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new NCALayerVerificationError('REVOCATION_CHECK_FAILED', `OCSP/CRL service returned HTTP status ${response.status}`);
+      }
+
+      const text = await response.text();
+      if (text.includes('REVOKED')) {
+        throw new NCALayerVerificationError('CERT_REVOKED', 'Signer certificate has been REVOKED according to NUC RK OCSP/CRL service.');
+      }
+    } catch (err: any) {
+      clearTimeout(timeout);
+      if (err instanceof NCALayerVerificationError) throw err;
+      throw new NCALayerVerificationError(
+        'REVOCATION_CHECK_FAILED',
+        `Revocation check failed (fail-closed policy): ${err.name === 'AbortError' ? 'OCSP service request timed out' : err.message}`
+      );
     }
   }
 }

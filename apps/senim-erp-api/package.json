@@ -27,8 +27,11 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.12.12",
     "@types/node-forge": "^1.3.11",
+    "asn1js": "^3.0.5",
     "node-forge": "^1.3.1",
+    "pkijs": "^3.0.16",
     "prisma": "^5.14.0",
+    "pvutils": "^1.1.3",
     "typescript": "^5.4.5"
   }
 }
