@@ -242,8 +242,8 @@ async function runCreditNoteTest() {
   const discountsIssuedRes = await fetch(`${baseUrl}/api/reports/discounts`, { headers: getAuthHeaders() });
   const discountsIssued = await discountsIssuedRes.json();
   const custDiscountIssued = discountsIssued.find((d: any) => d.customerId === customerId);
-  if (custDiscountIssued?.totalDiscountAmount !== 0) {
-    throw new Error(`ISSUED CreditNote should reduce discounts report to 0 (5,000 - 5,000). Got ${custDiscountIssued?.totalDiscountAmount}`);
+  if (custDiscountIssued?.totalDiscountAmount !== 4000) {
+    throw new Error(`ISSUED CreditNote should reduce discounts report proportionally to 4,000 (5,000 - 1,000). Got ${custDiscountIssued?.totalDiscountAmount}`);
   }
 
   const currencyIssuedRes = await fetch(`${baseUrl}/api/reports/currency-exposure`, { headers: getAuthHeaders() });

@@ -717,6 +717,10 @@ export class ErpController {
               const lineVat = line.vatAmount != null ? Number(line.vatAmount) : Number((price * qty * (vatRate / 100)).toFixed(2));
               const lineTotal = line.totalAmount != null ? Number(line.totalAmount) : Number((price * qty + lineVat).toFixed(2));
 
+              const wbQty = Number(wbItem?.quantity || 0);
+              const wbDiscount = Number(wbItem?.discountAmount || 0);
+              const proratedDiscount = wbQty > 0 ? Number((wbDiscount * (qty / wbQty)).toFixed(2)) : 0;
+
               return {
                 sku: line.sku,
                 crmProductId: wbItem?.crmProductId || null,
@@ -726,7 +730,7 @@ export class ErpController {
                 vatRate,
                 vatAmount: lineVat,
                 totalAmount: lineTotal,
-                discountAmount: Number(wbItem?.discountAmount || 0),
+                discountAmount: proratedDiscount,
                 dealCurrency: wbItem?.dealCurrency || null,
                 dealCurrencyPrice: wbItem?.dealCurrencyPrice != null ? Number(wbItem.dealCurrencyPrice) : null,
                 exchangeRate: wbItem?.exchangeRate != null ? Number(wbItem.exchangeRate) : null,
