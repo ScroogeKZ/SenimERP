@@ -725,7 +725,12 @@ export class ErpController {
                 price,
                 vatRate,
                 vatAmount: lineVat,
-                totalAmount: lineTotal
+                totalAmount: lineTotal,
+                discountAmount: Number(wbItem?.discountAmount || 0),
+                dealCurrency: wbItem?.dealCurrency || null,
+                dealCurrencyPrice: wbItem?.dealCurrencyPrice != null ? Number(wbItem.dealCurrencyPrice) : null,
+                exchangeRate: wbItem?.exchangeRate != null ? Number(wbItem.exchangeRate) : null,
+                exchangeRateDate: wbItem?.exchangeRateDate || null
               };
             })
           }
@@ -2019,6 +2024,30 @@ export class ErpController {
     for (const wb of waybills) processItems(wb.customerId, wb.items);
     for (const act of acts) processItems(act.customerId, act.items);
 
+    const allDiscountCreditNotes = await db.creditNote.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+    for (const cn of allDiscountCreditNotes.filter((c: any) => c.status === 'ISSUED')) {
+      let entry = discountMap.get(cn.customerId);
+      if (!entry) {
+        entry = { customerId: cn.customerId, customerName: 'Unknown', bin: '', totalDiscountAmount: 0, itemCount: 0 };
+        discountMap.set(cn.customerId, entry);
+      }
+      for (const item of cn.items) {
+        const discountAmt = Number(item.discountAmount || 0);
+        entry.totalDiscountAmount -= discountAmt;
+        if (discountAmt !== 0) {
+          entry.itemCount += 1;
+        }
+      }
+    }
+
     return Array.from(discountMap.values()).map((r) => ({
       ...r,
       totalDiscountAmount: Number(r.totalDiscountAmount.toFixed(2))
@@ -2103,6 +2132,39 @@ export class ErpController {
     for (const inv of invoices) processItems(inv.items);
     for (const wb of waybills) processItems(wb.items);
     for (const act of acts) processItems(act.items);
+
+    const allCurrencyCreditNotes = await db.creditNote.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+    for (const cn of allCurrencyCreditNotes.filter((c: any) => c.status === 'ISSUED')) {
+      for (const item of cn.items) {
+        if (!item.dealCurrency) continue;
+        let entry = currencyMap.get(item.dealCurrency);
+        if (!entry) {
+          entry = {
+            currency: item.dealCurrency,
+            totalKztAmount: 0,
+            totalForeignCurrencyAmount: 0,
+            lineItemCount: 0
+          };
+          currencyMap.set(item.dealCurrency, entry);
+        }
+
+        const kztAmt = Number(item.totalAmount || 0);
+        const foreignPrice = Number(item.dealCurrencyPrice || 0);
+        const qty = Number(item.quantity || 0);
+
+        entry.totalKztAmount -= kztAmt;
+        entry.totalForeignCurrencyAmount -= foreignPrice * qty;
+        entry.lineItemCount += 1;
+      }
+    }
 
     return Array.from(currencyMap.values()).map((r) => ({
       currency: r.currency,

@@ -81,8 +81,8 @@ async function runCreditNoteTest() {
     VALUES ('${waybillId}', '${waybillNumber}', '${customerId}', '${defaultWarehouseId}', 112000, 12000, 'DRAFT', '${crmDealId}');
   `);
   await tenantClient.$executeRawUnsafe(`
-    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
-    VALUES ('line_cn_${Date.now()}', '${waybillId}', '${sku}', 'Ноутбук', 10, 10000, 12, 12000, 112000);
+    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount", "discountAmount", "dealCurrency", "dealCurrencyPrice", "exchangeRate")
+    VALUES ('line_cn_${Date.now()}', '${waybillId}', '${sku}', 'Ноутбук', 10, 10000, 12, 12000, 112000, 5000, 'USD', 20, 500);
   `);
 
   // Reserve stock & sign waybill
@@ -169,7 +169,7 @@ async function runCreditNoteTest() {
     throw new Error(`DRAFT CreditNote should NOT reduce debt. Expected 112,000, got ${custDebtor?.outstandingDebt}`);
   }
 
-  // Verify top-customers & top-products remain unreduced during DRAFT status
+  // Verify top-customers, top-products, discounts & currency-exposure remain unreduced during DRAFT status
   const topCustDraftRes = await fetch(`${baseUrl}/api/reports/top-customers`, { headers: getAuthHeaders() });
   const topCustDraft = await topCustDraftRes.json();
   const custDraftEntry = topCustDraft.find((c: any) => c.customerId === customerId);
@@ -183,7 +183,21 @@ async function runCreditNoteTest() {
   if (prodDraftEntry?.totalRevenue !== 112000 || prodDraftEntry?.totalQuantity !== 10) {
     throw new Error(`DRAFT CreditNote should NOT reduce top-products. Expected revenue 112,000 & qty 10, got: ${JSON.stringify(prodDraftEntry)}`);
   }
-  console.log('[Test 5a SUCCESS] DRAFT CreditNote correctly ignored in top-customers & top-products reports.');
+
+  const discountsDraftRes = await fetch(`${baseUrl}/api/reports/discounts`, { headers: getAuthHeaders() });
+  const discountsDraft = await discountsDraftRes.json();
+  const custDiscountDraft = discountsDraft.find((d: any) => d.customerId === customerId);
+  if (custDiscountDraft?.totalDiscountAmount !== 5000) {
+    throw new Error(`DRAFT CreditNote should NOT reduce discounts report. Expected 5,000, got ${custDiscountDraft?.totalDiscountAmount}`);
+  }
+
+  const currencyDraftRes = await fetch(`${baseUrl}/api/reports/currency-exposure`, { headers: getAuthHeaders() });
+  const currencyDraft = await currencyDraftRes.json();
+  const usdDraft = currencyDraft.find((c: any) => c.currency === 'USD');
+  if (usdDraft?.totalKztAmount !== 112000 || usdDraft?.totalForeignCurrencyAmount !== 200) {
+    throw new Error(`DRAFT CreditNote should NOT reduce currency-exposure. Expected KZT 112,000 & USD 200, got: ${JSON.stringify(usdDraft)}`);
+  }
+  console.log('[Test 5a SUCCESS] DRAFT CreditNote correctly ignored in top-customers, top-products, discounts & currency-exposure reports.');
 
   // --- Step 4: POST /api/credit-notes/:id/sign moves status to ISSUED, creates signature & ESF ---
   console.log(`[Test 4] Signing CreditNote ${creditNote.id}...`);
@@ -210,7 +224,7 @@ async function runCreditNoteTest() {
     throw new Error(`ISSUED CreditNote should reduce debt to 89,600 (112,000 - 22,400). Got ${custDebtor?.outstandingDebt}`);
   }
 
-  // Verify top-customers & top-products deduct ISSUED CreditNote
+  // Verify top-customers, top-products, discounts & currency-exposure deduct ISSUED CreditNote
   const topCustIssuedRes = await fetch(`${baseUrl}/api/reports/top-customers`, { headers: getAuthHeaders() });
   const topCustIssued = await topCustIssuedRes.json();
   const custIssuedEntry = topCustIssued.find((c: any) => c.customerId === customerId);
@@ -224,7 +238,21 @@ async function runCreditNoteTest() {
   if (prodIssuedEntry?.totalRevenue !== 89600 || prodIssuedEntry?.totalQuantity !== 8) {
     throw new Error(`ISSUED CreditNote should reduce top-products. Expected revenue 89,600 & qty 8, got: ${JSON.stringify(prodIssuedEntry)}`);
   }
-  console.log('[Test 5b SUCCESS] ISSUED CreditNote correctly deducted from top-customers & top-products reports!');
+
+  const discountsIssuedRes = await fetch(`${baseUrl}/api/reports/discounts`, { headers: getAuthHeaders() });
+  const discountsIssued = await discountsIssuedRes.json();
+  const custDiscountIssued = discountsIssued.find((d: any) => d.customerId === customerId);
+  if (custDiscountIssued?.totalDiscountAmount !== 0) {
+    throw new Error(`ISSUED CreditNote should reduce discounts report to 0 (5,000 - 5,000). Got ${custDiscountIssued?.totalDiscountAmount}`);
+  }
+
+  const currencyIssuedRes = await fetch(`${baseUrl}/api/reports/currency-exposure`, { headers: getAuthHeaders() });
+  const currencyIssued = await currencyIssuedRes.json();
+  const usdIssued = currencyIssued.find((c: any) => c.currency === 'USD');
+  if (usdIssued?.totalKztAmount !== 89600 || usdIssued?.totalForeignCurrencyAmount !== 160) {
+    throw new Error(`ISSUED CreditNote should reduce currency-exposure. Expected KZT 89,600 & USD 160, got: ${JSON.stringify(usdIssued)}`);
+  }
+  console.log('[Test 5b SUCCESS] ISSUED CreditNote correctly deducted from top-customers, top-products, discounts & currency-exposure reports!');
 
   // --- Step 6: GET /api/reports/revenue-trend reflects returns and netRevenue ---
   console.log('[Test 6] Checking revenue trend report...');

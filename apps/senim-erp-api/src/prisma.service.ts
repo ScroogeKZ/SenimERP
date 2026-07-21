@@ -573,9 +573,20 @@ export class TenantPrismaService implements OnModuleDestroy {
                 "price" DECIMAL(15, 2) NOT NULL,
                 "vatRate" DECIMAL(5, 2) NOT NULL,
                 "vatAmount" DECIMAL(15, 2) NOT NULL,
-                "totalAmount" DECIMAL(15, 2) NOT NULL
+                "totalAmount" DECIMAL(15, 2) NOT NULL,
+                "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+                "dealCurrency" TEXT,
+                "dealCurrencyPrice" DECIMAL(15, 4),
+                "exchangeRate" DECIMAL(12, 6),
+                "exchangeRateDate" TIMESTAMP
               );
             `);
+
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNoteLineItem" ADD COLUMN IF NOT EXISTS "discountAmount" DECIMAL(15, 2) NOT NULL DEFAULT 0.00;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNoteLineItem" ADD COLUMN IF NOT EXISTS "dealCurrency" TEXT;`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNoteLineItem" ADD COLUMN IF NOT EXISTS "dealCurrencyPrice" DECIMAL(15, 4);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNoteLineItem" ADD COLUMN IF NOT EXISTS "exchangeRate" DECIMAL(12, 6);`);
+            await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."CreditNoteLineItem" ADD COLUMN IF NOT EXISTS "exchangeRateDate" TIMESTAMP;`);
 
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "price" DECIMAL(15, 2);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."RmaLine" ADD COLUMN IF NOT EXISTS "vatRate" DECIMAL(5, 2);`);
