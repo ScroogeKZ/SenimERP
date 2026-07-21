@@ -2292,6 +2292,32 @@ export class ErpController {
       entry.invoiceCount += 1;
     }
 
+    const allCreditNotes = await db.creditNote.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      }
+    });
+    const creditNotes = allCreditNotes.filter((cn: any) => cn.status === 'ISSUED');
+
+    for (const cn of creditNotes) {
+      let entry = aggMap.get(cn.customerId);
+      if (!entry) {
+        const cInfo = custMap.get(cn.customerId);
+        entry = {
+          customerId: cn.customerId,
+          customerName: cInfo?.name || 'Unknown',
+          bin: cInfo?.bin || '',
+          totalRevenue: 0,
+          invoiceCount: 0
+        };
+        aggMap.set(cn.customerId, entry);
+      }
+      entry.totalRevenue -= Number(cn.amount || 0);
+    }
+
     return Array.from(aggMap.values())
       .sort((a, b) => b.totalRevenue - a.totalRevenue)
       .slice(0, limit)
@@ -2366,6 +2392,36 @@ export class ErpController {
 
         entry.totalRevenue += Number(item.totalAmount || 0);
         entry.totalQuantity += Number(item.quantity || 0);
+      }
+    }
+
+    const allProductCreditNotes = await db.creditNote.findMany({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      },
+      include: { items: true }
+    });
+    const productCreditNotes = allProductCreditNotes.filter((cn: any) => cn.status === 'ISSUED');
+
+    for (const cn of productCreditNotes) {
+      for (const item of cn.items) {
+        let entry = productMap.get(item.sku);
+        if (!entry) {
+          entry = {
+            sku: item.sku,
+            name: item.name,
+            totalRevenue: 0,
+            totalQuantity: 0
+          };
+          productMap.set(item.sku, entry);
+        } else if (item.name) {
+          entry.name = item.name;
+        }
+        entry.totalRevenue -= Number(item.totalAmount || 0);
+        entry.totalQuantity -= Number(item.quantity || 0);
       }
     }
 

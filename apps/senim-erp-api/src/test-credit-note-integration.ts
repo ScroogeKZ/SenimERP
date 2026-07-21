@@ -104,6 +104,10 @@ async function runCreditNoteTest() {
     INSERT INTO "${schemaName}"."Invoice" (id, number, "customerId", amount, "vatAmount", "paidAmount", status, "dueDate", "crmDealId")
     VALUES ('${invoiceId}', '${invoiceNumber}', '${customerId}', 112000, 12000, 0, 'ISSUED', NOW(), '${crmDealId}');
   `);
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."InvoiceLineItem" (id, "invoiceId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('inv_item_${Date.now()}', '${invoiceId}', '${sku}', 'Ноутбук', 10, 10000, 12, 12000, 112000);
+  `);
 
   // Initial Debtors check
   console.log('[Test] Checking initial debtors balance...');
@@ -155,8 +159,8 @@ async function runCreditNoteTest() {
     throw new Error(`CreditNote invoiceId expected ${invoiceId}, got ${creditNote.invoiceId}`);
   }
 
-  // --- Step 5a: GET /api/debtors — DRAFT CreditNote does NOT reduce debt ---
-  console.log('[Test 5a] Checking debtors with DRAFT CreditNote...');
+  // --- Step 5a: GET /api/debtors & BI reports — DRAFT CreditNote does NOT reduce debt/revenue ---
+  console.log('[Test 5a] Checking debtors & reports with DRAFT CreditNote...');
   debtorsRes = await fetch(`${baseUrl}/api/debtors`, { headers: getAuthHeaders() });
   debtors = await debtorsRes.json();
   custDebtor = debtors.find((d: any) => d.customerId === customerId);
@@ -164,6 +168,22 @@ async function runCreditNoteTest() {
   if (Number(custDebtor?.outstandingDebt) !== 112000) {
     throw new Error(`DRAFT CreditNote should NOT reduce debt. Expected 112,000, got ${custDebtor?.outstandingDebt}`);
   }
+
+  // Verify top-customers & top-products remain unreduced during DRAFT status
+  const topCustDraftRes = await fetch(`${baseUrl}/api/reports/top-customers`, { headers: getAuthHeaders() });
+  const topCustDraft = await topCustDraftRes.json();
+  const custDraftEntry = topCustDraft.find((c: any) => c.customerId === customerId);
+  if (custDraftEntry?.totalRevenue !== 112000) {
+    throw new Error(`DRAFT CreditNote should NOT reduce top-customers revenue. Expected 112,000, got ${custDraftEntry?.totalRevenue}`);
+  }
+
+  const topProdDraftRes = await fetch(`${baseUrl}/api/reports/top-products`, { headers: getAuthHeaders() });
+  const topProdDraft = await topProdDraftRes.json();
+  const prodDraftEntry = topProdDraft.find((p: any) => p.sku === sku);
+  if (prodDraftEntry?.totalRevenue !== 112000 || prodDraftEntry?.totalQuantity !== 10) {
+    throw new Error(`DRAFT CreditNote should NOT reduce top-products. Expected revenue 112,000 & qty 10, got: ${JSON.stringify(prodDraftEntry)}`);
+  }
+  console.log('[Test 5a SUCCESS] DRAFT CreditNote correctly ignored in top-customers & top-products reports.');
 
   // --- Step 4: POST /api/credit-notes/:id/sign moves status to ISSUED, creates signature & ESF ---
   console.log(`[Test 4] Signing CreditNote ${creditNote.id}...`);
@@ -180,8 +200,8 @@ async function runCreditNoteTest() {
     throw new Error('CreditNote sign assertion failed!');
   }
 
-  // --- Step 5b: GET /api/debtors — ISSUED CreditNote reduces debt ---
-  console.log('[Test 5b] Checking debtors with ISSUED CreditNote...');
+  // --- Step 5b: GET /api/debtors & BI reports — ISSUED CreditNote reduces debt/revenue ---
+  console.log('[Test 5b] Checking debtors & reports with ISSUED CreditNote...');
   debtorsRes = await fetch(`${baseUrl}/api/debtors`, { headers: getAuthHeaders() });
   debtors = await debtorsRes.json();
   custDebtor = debtors.find((d: any) => d.customerId === customerId);
@@ -189,6 +209,22 @@ async function runCreditNoteTest() {
   if (Number(custDebtor?.totalCredited) !== 22400 || Number(custDebtor?.outstandingDebt) !== 89600) {
     throw new Error(`ISSUED CreditNote should reduce debt to 89,600 (112,000 - 22,400). Got ${custDebtor?.outstandingDebt}`);
   }
+
+  // Verify top-customers & top-products deduct ISSUED CreditNote
+  const topCustIssuedRes = await fetch(`${baseUrl}/api/reports/top-customers`, { headers: getAuthHeaders() });
+  const topCustIssued = await topCustIssuedRes.json();
+  const custIssuedEntry = topCustIssued.find((c: any) => c.customerId === customerId);
+  if (custIssuedEntry?.totalRevenue !== 89600) {
+    throw new Error(`ISSUED CreditNote should reduce top-customers revenue to 89,600 (112,000 - 22,400). Got ${custIssuedEntry?.totalRevenue}`);
+  }
+
+  const topProdIssuedRes = await fetch(`${baseUrl}/api/reports/top-products`, { headers: getAuthHeaders() });
+  const topProdIssued = await topProdIssuedRes.json();
+  const prodIssuedEntry = topProdIssued.find((p: any) => p.sku === sku);
+  if (prodIssuedEntry?.totalRevenue !== 89600 || prodIssuedEntry?.totalQuantity !== 8) {
+    throw new Error(`ISSUED CreditNote should reduce top-products. Expected revenue 89,600 & qty 8, got: ${JSON.stringify(prodIssuedEntry)}`);
+  }
+  console.log('[Test 5b SUCCESS] ISSUED CreditNote correctly deducted from top-customers & top-products reports!');
 
   // --- Step 6: GET /api/reports/revenue-trend reflects returns and netRevenue ---
   console.log('[Test 6] Checking revenue trend report...');
