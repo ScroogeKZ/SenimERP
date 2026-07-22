@@ -2,32 +2,134 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --paper: #f3f4f6;
+  --surface: #ffffff;
+  --ink: #17181a;
+  --ink-muted: #6b7280;
+  --hairline: #e5e7eb;
+  
+  --accent: #1f5c4c;
+  --accent-soft: rgba(31, 92, 76, 0.1);
+  --gold: #b8863b;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --success: #10b981;
+  
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --brand-primary: var(--accent);
+}
+
+[data-theme='dark'], .dark {
+  --paper: #0b0f17;
+  --surface: #111827;
+  --ink: #f9fafb;
+  --ink-muted: #9ca3af;
+  --hairline: #1f2937;
+  
+  --accent: #3e9a80;
+  --accent-soft: rgba(62, 154, 128, 0.15);
+  --gold: #d97706;
+  --danger: #f87171;
+  --warning: #fbbf24;
+  --success: #34d399;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --brand-primary: var(--accent);
+}
+
 @layer base {
+  * {
+    border-color: var(--hairline);
+  }
   body {
-    background: radial-gradient(circle at top right, #111827, #030712);
+    background: var(--background);
+    color: var(--foreground);
     min-height: 100vh;
-    color: #f3f4f6;
+    font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .apple-card {
+    background-color: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  }
+
+  .apple-btn-primary {
+    background-color: var(--accent);
+    color: #ffffff;
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .apple-btn-primary:hover {
+    opacity: 0.92;
+    transform: translateY(-0.5px);
+  }
+  .apple-btn-primary:active {
+    transform: translateY(0);
+  }
+
+  .apple-btn-secondary {
+    background-color: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .apple-btn-secondary:hover {
+    background-color: var(--hairline);
+  }
+
+  .apple-input {
+    background-color: var(--paper);
+    border: 1px solid var(--hairline);
+    color: var(--ink);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+  }
+  .apple-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 }
 
 .glass {
-  background: rgba(17, 24, 39, 0.7);
+  background: var(--surface);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.glow-indigo {
-  transition: all 0.3s ease;
-}
-.glow-indigo:hover {
-  box-shadow: 0 0 25px rgba(99, 102, 241, 0.35);
-  border-color: rgba(99, 102, 241, 0.3);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .glow-emerald {
   transition: all 0.3s ease;
 }
 .glow-emerald:hover {
-  box-shadow: 0 0 25px rgba(16, 185, 129, 0.35);
-  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 0 25px var(--accent-soft);
+  border-color: var(--accent);
 }
