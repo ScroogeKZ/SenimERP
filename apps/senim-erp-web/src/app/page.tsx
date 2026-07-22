@@ -101,6 +101,13 @@ export default function ErpDashboard() {
     });
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('sso_token');
+    setSsoToken('');
+    setUser(null);
+    window.location.href = 'http://localhost:3001/login';
+  };
+
   // Initialize SSO session
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -113,12 +120,10 @@ export default function ErpDashboard() {
         localStorage.setItem('sso_token', token);
         setUser(payload);
         return;
+      } else {
+        localStorage.removeItem('sso_token');
       }
     }
-
-    // Auto-redirect to SSO Auth Service
-    const currentUrl = typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'http://localhost:3005';
-    window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(currentUrl)}`;
   }, []);
 
   // Fetch ERP resources
@@ -379,26 +384,81 @@ export default function ErpDashboard() {
   };
 
   if (!user) {
+    const ssoUrl = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'http://localhost:3005')}`;
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen space-y-6 bg-[var(--paper)] text-[var(--ink)] p-4">
-        <div className="w-10 h-10 border-3 border-[var(--accent)] border-t-transparent rounded-full animate-spin"></div>
-        <div className="text-center space-y-1">
-          <p className="text-sm font-semibold text-[var(--ink)]">Проверка единой сессии SSO...</p>
-          <p className="text-xs text-[var(--ink-muted)]">Перенаправление на сервер авторизации (http://localhost:3001)</p>
-        </div>
-        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <a
-            href={`http://localhost:3001/login?redirect_uri=${encodeURIComponent(typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'http://localhost:3005')}`}
-            className="apple-btn-secondary text-xs"
-          >
-            Войти через Senim SSO
-          </a>
-          <button
-            onClick={handleDevLogin}
-            className="apple-btn-primary text-xs"
-          >
-            Демо-вход (Бухгалтер)
-          </button>
+      <div 
+        className="flex flex-col items-center justify-center min-h-screen p-4"
+        style={{
+          background: 'radial-gradient(circle at top right, #0f172a, #1e1b4b, #090d16)',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          color: '#f8fafc'
+        }}
+      >
+        <div 
+          className="w-full max-w-md p-8 rounded-2xl border shadow-2xl text-center space-y-6"
+          style={{
+            background: 'rgba(30, 41, 59, 0.75)',
+            backdropFilter: 'blur(20px)',
+            borderColor: 'rgba(255, 255, 255, 0.12)',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)'
+          }}
+        >
+          {/* Logo Badge */}
+          <div className="flex justify-center mb-2">
+            <div 
+              className="w-16 h-16 rounded-2xl flex items-center justify-center font-black text-2xl text-white shadow-lg"
+              style={{ background: 'linear-gradient(135deg, #6366f1, #a855f7)' }}
+            >
+              SE
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h1 className="text-2xl font-extrabold tracking-tight text-white">
+              Senim<span style={{ color: '#a855f7' }}>ERP</span> System
+            </h1>
+            <p className="text-sm text-slate-400">
+              Корпоративная платформа учета и управления ресурсами предприятия
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl text-left text-xs space-y-2" style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <div className="flex items-center space-x-2 text-emerald-400 font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>Статус сервера авторизации: Готов</span>
+            </div>
+            <p className="text-slate-400 text-[11px]">
+              Для доступа к счетам, накладным и интеграции с ИС ЭСФ выберите вариант входа:
+            </p>
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <a
+              href={ssoUrl}
+              className="flex items-center justify-center w-full py-3.5 px-4 rounded-xl font-bold text-sm text-white shadow-lg transition-all"
+              style={{
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                boxShadow: '0 4px 14px 0 rgba(99, 102, 241, 0.4)'
+              }}
+            >
+              Войти через Senim SSO (Портал)
+            </a>
+
+            <button
+              onClick={handleDevLogin}
+              className="flex items-center justify-center w-full py-3.5 px-4 rounded-xl font-bold text-sm text-slate-200 transition-all hover:bg-white/10"
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.15)'
+              }}
+            >
+              Быстрый демо-вход (Бухгалтер)
+            </button>
+          </div>
+
+          <div className="text-[11px] text-slate-500 pt-2">
+            Казахстанский МСБ • ЭЦП НУЦ РК • ИС ЭСФ Integration
+          </div>
         </div>
       </div>
     );
@@ -421,6 +481,7 @@ export default function ErpDashboard() {
         user={user}
         onMenuClick={() => setSidebarOpen(true)}
         onNavigateHome={() => setActiveTab('invoices')}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
