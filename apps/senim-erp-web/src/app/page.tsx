@@ -412,7 +412,7 @@ export default function ErpDashboard() {
       <Header activeTabLabel={getTabLabel(activeTab)} ssoToken={ssoToken} user={user} />
 
       {/* Main Content Area */}
-      <main className="pl-[260px] pt-16 min-h-screen p-6 md:p-8 space-y-6">
+      <main className="pl-[260px] pt-16 min-h-screen py-6 pr-6 md:py-8 md:pr-8 space-y-6">
 
         {/* Global Toast Alert */}
         {alert && (
