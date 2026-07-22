@@ -2,7 +2,6 @@ import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/commo
 import { EventBusSubscriber, EventBusPublisher, redisConnection } from '@senimerp/event-bus-client';
 import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
-import crypto from 'crypto';
 
 @Injectable()
 export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
@@ -95,6 +94,16 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
 
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
+
+    const shortageEvents: Array<{
+      dealId: string;
+      sku: string;
+      requestedQuantity: number;
+      physicalQuantity: number;
+      reservedQuantity: number;
+      shortageQuantity: number;
+      warehouseId: string;
+    }> = [];
 
     try {
       // Run dynamic transaction to write all ERP documents
@@ -283,21 +292,14 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             const shortageQty = reservedQty - physicalQty;
             console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved (${reservedQty}) exceeds physical quantity (${physicalQty}).`);
 
-            // Publish stock.shortage_detected integration event to CRM
-            await this.publisher.publishEvent({
-              eventId: crypto.randomUUID(),
-              eventType: 'stock.shortage_detected',
-              tenantId,
-              timestamp: new Date().toISOString(),
-              payload: {
-                dealId,
-                sku: line.sku,
-                requestedQuantity: line.quantity,
-                physicalQuantity: physicalQty,
-                reservedQuantity: reservedQty,
-                shortageQuantity: shortageQty,
-                warehouseId: defaultWarehouseId
-              }
+            shortageEvents.push({
+              dealId,
+              sku: line.sku,
+              requestedQuantity: line.quantity,
+              physicalQuantity: physicalQty,
+              reservedQuantity: reservedQty,
+              shortageQuantity: shortageQty,
+              warehouseId: defaultWarehouseId
             });
           }
         }
@@ -362,6 +364,20 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     });
 
     console.log(`[EventConsumer] Event deal.won processed successfully. Database transaction completed.`);
+
+    for (const shortage of shortageEvents) {
+      try {
+        await this.publisher.publishEvent({
+          eventId: `${eventId}:shortage:${shortage.warehouseId}:${shortage.sku}`,
+          eventType: 'stock.shortage_detected',
+          tenantId,
+          timestamp: new Date().toISOString(),
+          payload: shortage
+        });
+      } catch (publishErr) {
+        console.error(`[EventConsumer] Failed to publish stock.shortage_detected for deal ${dealId}, SKU ${shortage.sku}:`, publishErr);
+      }
+    }
     } catch (e: any) {
       if (e?.code === 'P2002' && e?.meta?.target?.includes('id')) {
         console.warn(`[EventConsumer] Event ${eventId} was already processed. Skipping.`);
