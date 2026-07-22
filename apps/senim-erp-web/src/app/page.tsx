@@ -57,30 +57,67 @@ export default function ErpDashboard() {
   // Status alerts
   const [alert, setAlert] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
+  // Safe JWT payload parser supporting base64url (-_) and UTF-8
+  const parseJwtPayload = (token: string) => {
+    try {
+      const parts = token.split('.');
+      if (parts.length < 2) return null;
+      let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4 !== 0) {
+        base64 += '=';
+      }
+      const jsonPayload = decodeURIComponent(
+        window
+          .atob(base64)
+          .split('')
+          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      return JSON.parse(jsonPayload);
+    } catch (e) {
+      console.error('Failed to parse JWT payload', e);
+      return null;
+    }
+  };
+
+  // Helper for quick local development login
+  const handleDevLogin = () => {
+    const mockHeader = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+    const mockPayload = btoa(JSON.stringify({
+      sub: 'usr_accountant_test',
+      email: 'accountant@senim.kz',
+      tenantId: 'tenant_alpha',
+      roles: ['ERP_ACCOUNTANT', 'CRM_MANAGER']
+    }));
+    const mockToken = `${mockHeader}.${mockPayload}.mock_signature`;
+    localStorage.setItem('sso_token', mockToken);
+    setSsoToken(mockToken);
+    setUser({
+      sub: 'usr_accountant_test',
+      email: 'accountant@senim.kz',
+      tenantId: 'tenant_alpha',
+      roles: ['ERP_ACCOUNTANT', 'CRM_MANAGER']
+    });
+  };
+
   // Initialize SSO session
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('sso_token') || localStorage.getItem('sso_token');
 
-    if (!token) {
-      const redirectUrl = window.location.href.split('?')[0];
-      window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(redirectUrl)}`;
-      return;
+    if (token) {
+      const payload = parseJwtPayload(token);
+      if (payload) {
+        setSsoToken(token);
+        localStorage.setItem('sso_token', token);
+        setUser(payload);
+        return;
+      }
     }
 
-    setSsoToken(token);
-    localStorage.setItem('sso_token', token);
-
-    // Decode token
-    try {
-      const payloadBase64 = token.split('.')[1];
-      const payloadJson = JSON.parse(atob(payloadBase64));
-      setUser(payloadJson);
-    } catch (e) {
-      console.error('Failed to decode token', e);
-      localStorage.removeItem('sso_token');
-      window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(window.location.href.split('?')[0])}`;
-    }
+    // Auto-redirect to SSO Auth Service
+    const currentUrl = typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'http://localhost:3005';
+    window.location.href = `http://localhost:3001/login?redirect_uri=${encodeURIComponent(currentUrl)}`;
   }, []);
 
   // Fetch ERP resources
@@ -342,9 +379,26 @@ export default function ErpDashboard() {
 
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen space-y-4 bg-[var(--paper)] text-[var(--ink)]">
+      <div className="flex flex-col items-center justify-center min-h-screen space-y-6 bg-[var(--paper)] text-[var(--ink)] p-4">
         <div className="w-10 h-10 border-3 border-[var(--accent)] border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-xs font-semibold text-[var(--ink-muted)]">Проверка единой сессии SSO...</p>
+        <div className="text-center space-y-1">
+          <p className="text-sm font-semibold text-[var(--ink)]">Проверка единой сессии SSO...</p>
+          <p className="text-xs text-[var(--ink-muted)]">Перенаправление на сервер авторизации (http://localhost:3001)</p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          <a
+            href={`http://localhost:3001/login?redirect_uri=${encodeURIComponent(typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'http://localhost:3005')}`}
+            className="apple-btn-secondary text-xs"
+          >
+            Войти через Senim SSO
+          </a>
+          <button
+            onClick={handleDevLogin}
+            className="apple-btn-primary text-xs"
+          >
+            Демо-вход (Бухгалтер)
+          </button>
+        </div>
       </div>
     );
   }
