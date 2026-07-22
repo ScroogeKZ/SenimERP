@@ -1,11 +1,13 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
-import { EventBusSubscriber, redisConnection } from '@senimerp/event-bus-client';
-import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload } from '@senimerp/types';
+import { EventBusSubscriber, EventBusPublisher, redisConnection } from '@senimerp/event-bus-client';
+import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
+import crypto from 'crypto';
 
 @Injectable()
 export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
   private subscriber!: EventBusSubscriber;
+  private publisher = new EventBusPublisher();
 
   constructor(@Inject(TenantPrismaService) private readonly prismaService: TenantPrismaService) {}
 
@@ -261,19 +263,42 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
           const existing = await tx.stockItem.findUnique({
             where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } }
           });
+          let physicalQty = 0;
+          let reservedQty = Number(line.quantity);
+
           if (existing) {
+            physicalQty = Number(existing.quantity);
+            reservedQty = Number(existing.reserved) + Number(line.quantity);
             await tx.stockItem.update({
               where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } },
               data: { reserved: { increment: line.quantity } }
             });
-            if (Number(existing.reserved) + Number(line.quantity) > Number(existing.quantity)) {
-              console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved exceeds physical quantity.`);
-            }
           } else {
             await tx.stockItem.create({
               data: { sku: line.sku, warehouseId: defaultWarehouseId, quantity: 0, reserved: line.quantity }
             });
-            console.warn(`[EventConsumer] Reserving SKU ${line.sku} at warehouse ${defaultWarehouseId} with zero physical stock.`);
+          }
+
+          if (reservedQty > physicalQty) {
+            const shortageQty = reservedQty - physicalQty;
+            console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved (${reservedQty}) exceeds physical quantity (${physicalQty}).`);
+
+            // Publish stock.shortage_detected integration event to CRM
+            await this.publisher.publishEvent({
+              eventId: crypto.randomUUID(),
+              eventType: 'stock.shortage_detected',
+              tenantId,
+              timestamp: new Date().toISOString(),
+              payload: {
+                dealId,
+                sku: line.sku,
+                requestedQuantity: line.quantity,
+                physicalQuantity: physicalQty,
+                reservedQuantity: reservedQty,
+                shortageQuantity: shortageQty,
+                warehouseId: defaultWarehouseId
+              }
+            });
           }
         }
 

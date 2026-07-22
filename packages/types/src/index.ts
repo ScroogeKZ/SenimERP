@@ -93,6 +93,17 @@ export interface StockLevelChangedPayload {
   reserved?: number;
 }
 
+// Stock Shortage Detected Event Payload (ERP -> CRM)
+export interface StockShortageDetectedPayload {
+  dealId: string;
+  sku: string;
+  requestedQuantity: number;
+  physicalQuantity: number;
+  reservedQuantity: number;
+  shortageQuantity: number;
+  warehouseId: string;
+}
+
 // Shipment Completed Event Payload (ERP -> CRM)
 export interface ShipmentCompletedPayload {
   waybillId: string;

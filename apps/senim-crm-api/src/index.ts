@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { EventBusPublisher, EventBusSubscriber, redisConnection } from '@senimerp/event-bus-client';
-import { IntegrationEvent, DealWonPayload, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload } from '@senimerp/types';
+import { IntegrationEvent, DealWonPayload, InvoicePaidPayload, ShipmentCompletedPayload, StockLevelChangedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 
 const app = express();
 app.use(cors());
@@ -106,6 +106,15 @@ new EventBusSubscriber(undefined, {
     const { sku, quantity } = event.payload;
     MOCK_STOCKS.set(sku, quantity);
     console.log(`[CRM API Subscriber] Event 'stock.level_changed' processed. SKU ${sku} balance: ${quantity}`);
+  },
+  'stock.shortage_detected': async (event: IntegrationEvent<StockShortageDetectedPayload>) => {
+    const { dealId, sku, shortageQuantity } = event.payload;
+    if (dealId && MOCK_DEALS.has(dealId)) {
+      const deal = MOCK_DEALS.get(dealId)!;
+      (deal as any).stockAlert = `Дефицит на складе: SKU ${sku} (недостаёт ${shortageQuantity} шт.)`;
+      MOCK_DEALS.set(dealId, deal);
+      console.warn(`[CRM API Subscriber] Event 'stock.shortage_detected' processed. Deal ${dealId} stock alert: ${(deal as any).stockAlert}`);
+    }
   }
 });
 
