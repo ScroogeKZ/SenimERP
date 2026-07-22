@@ -420,6 +420,7 @@ export default function ErpDashboard() {
         ssoToken={ssoToken}
         user={user}
         onMenuClick={() => setSidebarOpen(true)}
+        onNavigateHome={() => setActiveTab('invoices')}
       />
 
       {/* Main Content Area */}

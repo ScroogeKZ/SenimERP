@@ -9,9 +9,10 @@ interface HeaderProps {
   ssoToken?: string;
   user?: any;
   onMenuClick?: () => void;
+  onNavigateHome?: () => void;
 }
 
-export function Header({ activeTabLabel, ssoToken, user, onMenuClick }: HeaderProps) {
+export function Header({ activeTabLabel, ssoToken, user, onMenuClick, onNavigateHome }: HeaderProps) {
   return (
     <header className="fixed top-0 left-0 right-0 h-16 z-40 bg-[var(--surface)] border-b border-[var(--hairline)] px-4 md:px-6 flex items-center justify-between">
       {/* Left section: Breadcrumb & Menu Button */}
@@ -26,9 +27,13 @@ export function Header({ activeTabLabel, ssoToken, user, onMenuClick }: HeaderPr
           </button>
         )}
         <span className="hidden md:inline-flex items-center space-x-2 text-[var(--ink-muted)]">
-          <span>SenimERP</span>
+          <button onClick={onNavigateHome} className="hover:underline hover:text-[var(--ink)] transition-colors">
+            SenimERP
+          </button>
           <ChevronRight className="w-3.5 h-3.5 text-[var(--ink-muted)]" />
-          <span>Бухгалтерия</span>
+          <button onClick={onNavigateHome} className="hover:underline hover:text-[var(--ink)] transition-colors">
+            Бухгалтерия
+          </button>
           <ChevronRight className="w-3.5 h-3.5 text-[var(--ink-muted)]" />
         </span>
         <span className="text-[var(--ink)] font-semibold">{activeTabLabel}</span>
