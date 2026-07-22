@@ -7,14 +7,15 @@
   --surface: #ffffff;
   --ink: #17181a;
   --ink-muted: #6b7280;
-  --hairline: #e5e7eb;
+  --hairline: #e6e8eb;
   
   --accent: #1f5c4c;
+  --accent-hover: #17473b;
   --accent-soft: rgba(31, 92, 76, 0.1);
   --gold: #b8863b;
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --success: #10b981;
+  --danger: #c0392b;
+  --warning: #b8863b;
+  --success: #1f8a5c;
   
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -27,14 +28,15 @@
 
 [data-theme='dark'], .dark {
   --paper: #0b0f17;
-  --surface: #111827;
+  --surface: #17181b;
   --ink: #f9fafb;
   --ink-muted: #9ca3af;
   --hairline: #1f2937;
   
   --accent: #3e9a80;
+  --accent-hover: #4eb396;
   --accent-soft: rgba(62, 154, 128, 0.15);
-  --gold: #d97706;
+  --gold: #d2a24e;
   --danger: #f87171;
   --warning: #fbbf24;
   --success: #34d399;
@@ -78,7 +80,7 @@
     gap: 0.5rem;
   }
   .apple-btn-primary:hover {
-    opacity: 0.92;
+    background-color: var(--accent-hover);
     transform: translateY(-0.5px);
   }
   .apple-btn-primary:active {
