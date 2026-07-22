@@ -29,6 +29,7 @@ import { Sidebar, TabType } from '../components/Sidebar';
 
 export default function ErpDashboard() {
   const [activeTab, setActiveTab] = useState<TabType>('invoices');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [ssoToken, setSsoToken] = useState<string>('');
   const [user, setUser] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -405,14 +406,24 @@ export default function ErpDashboard() {
 
   return (
     <div className="min-h-screen bg-[var(--paper)] text-[var(--foreground)]">
-      {/* 260px Fixed Left Sidebar */}
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* 260px Fixed Left Sidebar (Off-canvas on mobile) */}
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
 
       {/* 64px Fixed Top Header */}
-      <Header activeTabLabel={getTabLabel(activeTab)} ssoToken={ssoToken} user={user} />
+      <Header
+        activeTabLabel={getTabLabel(activeTab)}
+        ssoToken={ssoToken}
+        user={user}
+        onMenuClick={() => setSidebarOpen(true)}
+      />
 
       {/* Main Content Area */}
-      <main className="pl-[260px] pt-16 min-h-screen py-6 pr-6 md:py-8 md:pr-8 space-y-6">
+      <main className="md:pl-[260px] pt-16 min-h-screen px-4 py-6 md:pr-8 md:py-8 space-y-6">
 
         {/* Global Toast Alert */}
         {alert && (
@@ -434,7 +445,7 @@ export default function ErpDashboard() {
             <h1 className="text-2xl font-bold tracking-tight text-[var(--ink)]">Бухгалтерский контур</h1>
             <p className="text-[var(--ink-muted)] text-xs mt-1">Реестр документов и дебиторской задолженности. Подписание ЭСФ/АВР посредством ЭЦП.</p>
           </div>
-          <button onClick={fetchData} className="apple-btn-secondary text-xs">
+          <button onClick={fetchData} className="apple-btn-secondary text-xs w-full md:w-auto">
             Обновить данные
           </button>
         </div>
