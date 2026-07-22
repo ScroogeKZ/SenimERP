@@ -423,7 +423,7 @@ export default function ErpDashboard() {
       />
 
       {/* Main Content Area */}
-      <main className="md:pl-[260px] pt-16 min-h-screen px-4 py-6 md:pr-8 md:py-8 space-y-6">
+      <main className="md:pl-[260px] pt-16 min-h-screen px-4 pb-6 md:pr-8 md:pb-8 space-y-6">
 
         {/* Global Toast Alert */}
         {alert && (
