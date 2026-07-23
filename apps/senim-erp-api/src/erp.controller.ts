@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException, Inject } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { calculateLineAmounts } from './pricing.utils.js';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { Roles } from './roles.decorator.js';
@@ -498,21 +499,6 @@ export class ErpController {
 
   // --- RMA (Returns) ---
 
-  private calculateLineAmounts(
-    price: Prisma.Decimal | number | string,
-    qty: Prisma.Decimal | number | string,
-    vatRate: Prisma.Decimal | number | string
-  ) {
-    const priceDecimal = new Prisma.Decimal(price);
-    const qtyDecimal = new Prisma.Decimal(qty);
-    const vatRateDecimal = new Prisma.Decimal(vatRate);
-
-    const lineVat = priceDecimal.mul(qtyDecimal).mul(vatRateDecimal).div(100).toDecimalPlaces(2);
-    const lineTotal = priceDecimal.mul(qtyDecimal).plus(lineVat).toDecimalPlaces(2);
-
-    return { vatAmount: lineVat, totalAmount: lineTotal };
-  }
-
   @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('rma')
   async createRma(
@@ -606,7 +592,7 @@ export class ErpController {
               const price = shippedItem?.price ?? 0;
               const vatRate = shippedItem?.vatRate ?? 0;
               const qty = i.quantity;
-              const { vatAmount, totalAmount } = this.calculateLineAmounts(price, qty, vatRate);
+              const { vatAmount, totalAmount } = calculateLineAmounts(price, qty, vatRate);
               return {
                 sku: i.sku,
                 warehouseId: targetWarehouseId,
@@ -711,7 +697,7 @@ export class ErpController {
         const qty = line.quantity;
         const { vatAmount, totalAmount } = (line.vatAmount != null && line.totalAmount != null)
           ? { vatAmount: new Prisma.Decimal(line.vatAmount), totalAmount: new Prisma.Decimal(line.totalAmount) }
-          : this.calculateLineAmounts(price, qty, vatRate);
+          : calculateLineAmounts(price, qty, vatRate);
 
         cnAmount = cnAmount.plus(totalAmount);
         cnVatAmount = cnVatAmount.plus(vatAmount);
@@ -742,7 +728,7 @@ export class ErpController {
               const qty = line.quantity;
               const { vatAmount, totalAmount } = (line.vatAmount != null && line.totalAmount != null)
                 ? { vatAmount: new Prisma.Decimal(line.vatAmount), totalAmount: new Prisma.Decimal(line.totalAmount) }
-                : this.calculateLineAmounts(price, qty, vatRate);
+                : calculateLineAmounts(price, qty, vatRate);
 
               const wbQty = new Prisma.Decimal(wbItem?.quantity ?? 0);
               const wbDiscount = new Prisma.Decimal(wbItem?.discountAmount ?? 0);

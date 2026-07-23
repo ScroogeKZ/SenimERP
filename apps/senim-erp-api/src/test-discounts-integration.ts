@@ -186,11 +186,147 @@ async function runDiscountsTest() {
   const customerReport = reportData.find((r: any) => r.bin === bin);
   if (!customerReport) throw new Error(`Customer report for BIN ${bin} not found in output`);
 
-  // Total discountAmount = Invoice1 (3000) + Waybill1 (2000) + Act1 (1000) + Invoice3 (-800) + Waybill3 (-800) = 4400 KZT
   console.log(`[Test 4 SUCCESS] Customer ${customerReport.customerName} total discount: ${customerReport.totalDiscountAmount} KZT across ${customerReport.itemCount} items.`);
   if (customerReport.totalDiscountAmount !== 4400) {
     throw new Error(`Expected total discount amount 4400. Got ${customerReport.totalDiscountAmount}`);
   }
+
+  // Step 5: Input Validation Rejection Tests
+  console.log('[Test 5] Testing handleDealWon input validation rejection...');
+  const invalidDealId = `deal_invalid_${Date.now()}`;
+  try {
+    await eventConsumer.handleDealWon({
+      eventId: `evt_inv_1_${Date.now()}`,
+      eventType: 'deal.won',
+      tenantId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        dealId: invalidDealId,
+        customerId,
+        customerName: 'Битый Запрос',
+        customerBin: bin,
+        items: [{ sku: 'SKU-BAD', name: 'Отрицательная цена', quantity: 1, price: -500 }]
+      }
+    } as any);
+    throw new Error('Negative price was expected to be rejected!');
+  } catch (err: any) {
+    if (!err.message.includes('Invalid price')) throw err;
+    console.log(`  [5a SUCCESS] Negative price rejected: ${err.message}`);
+  }
+
+  try {
+    await eventConsumer.handleDealWon({
+      eventId: `evt_inv_2_${Date.now()}`,
+      eventType: 'deal.won',
+      tenantId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        dealId: invalidDealId,
+        customerId,
+        customerName: 'Битый Запрос 2',
+        customerBin: bin,
+        items: [{ sku: 'SKU-BAD-2', name: 'Нулевое количество', quantity: 0, price: 1000 }]
+      }
+    } as any);
+    throw new Error('Zero quantity was expected to be rejected!');
+  } catch (err: any) {
+    if (!err.message.includes('Invalid quantity')) throw err;
+    console.log(`  [5b SUCCESS] Zero quantity rejected: ${err.message}`);
+  }
+
+  const badInv = await tenantClient.invoice.findFirst({ where: { crmDealId: invalidDealId } });
+  if (badInv) throw new Error('No invoice should be created for invalid deal payload!');
+  console.log('[Test 5 SUCCESS] Input validation rejection verified.');
+
+  // Step 6: Missing Default Warehouse Fallback Test
+  console.log('[Test 6] Testing missing default warehouse rejection and rollback...');
+  await tenantClient.$executeRawUnsafe(`UPDATE "${schemaName}"."Warehouse" SET "isDefault" = false;`);
+
+  const noWhDealId = `deal_nowh_${Date.now()}`;
+  try {
+    await eventConsumer.handleDealWon({
+      eventId: `evt_nowh_${Date.now()}`,
+      eventType: 'deal.won',
+      tenantId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        dealId: noWhDealId,
+        customerId,
+        customerName: 'Тест Без Склада',
+        customerBin: bin,
+        items: [{ sku: 'SKU-PHYS-NOWH', name: 'Физический Товар Без Склада', quantity: 5, price: 2000 }]
+      }
+    } as any);
+    throw new Error('deal.won with physical items and no default warehouse expected to fail!');
+  } catch (err: any) {
+    if (!err.message.includes('no default warehouse configured')) throw err;
+    console.log(`  [Test 6 SUCCESS] Missing default warehouse rejected: ${err.message}`);
+  }
+
+  const rolledBackInv = await tenantClient.invoice.findFirst({ where: { crmDealId: noWhDealId } });
+  const rolledBackWb = await tenantClient.waybill.findFirst({ where: { crmDealId: noWhDealId } });
+  if (rolledBackInv || rolledBackWb) {
+    throw new Error('Transaction was not rolled back properly on missing warehouse error!');
+  }
+  console.log('[Test 6 SUCCESS] Transaction rollback verified on missing default warehouse.');
+
+  // Restore default warehouse for subsequent tests
+  await tenantClient.$executeRawUnsafe(`UPDATE "${schemaName}"."Warehouse" SET "isDefault" = true;`);
+
+  // Step 7: Decimal Precision & Multi-item Rounding Assertion
+  console.log('[Test 7] Testing multi-item Decimal precision rounding...');
+  const decDealId = `deal_dec_${Date.now()}`;
+  await eventConsumer.handleDealWon({
+    eventId: `evt_dec_${Date.now()}`,
+    eventType: 'deal.won',
+    tenantId,
+    timestamp: new Date().toISOString(),
+    payload: {
+      dealId: decDealId,
+      customerId,
+      customerName: 'Дробный Клиент',
+      customerBin: bin,
+      items: [
+        { sku: 'SKU-DEC-1', name: 'Товар 1', quantity: 3, price: 100.33, vatRate: 12 },
+        { sku: 'SKU-DEC-2', name: 'Товар 2', quantity: 7, price: 55.55, vatRate: 12 },
+        { sku: 'SRV-DEC-1', name: 'Услуга 1', quantity: 2, price: 99.99, vatRate: 12 }
+      ]
+    }
+  } as any);
+
+  const decInv = await tenantClient.invoice.findFirst({
+    where: { crmDealId: decDealId },
+    include: { items: true }
+  });
+  if (!decInv) throw new Error('Decimal Invoice creation failed');
+
+  // Item 1: 100.33 * 3 = 300.99, vat = 36.12, total = 337.11
+  // Item 2: 55.55 * 7 = 388.85, vat = 46.66, total = 435.51
+  // Item 3: 99.99 * 2 = 199.98, vat = 24.00, total = 223.98
+  // Total Invoice vatAmount = 36.12 + 46.66 + 24.00 = 106.78
+  // Total Invoice amount = 337.11 + 435.51 + 223.98 = 996.60
+  if (Number(decInv.vatAmount) !== 106.78 || Number(decInv.amount) !== 996.60) {
+    throw new Error(`Invoice Decimal total mismatch! Expected vatAmount=106.78, amount=996.60. Got vat=${decInv.vatAmount}, amount=${decInv.amount}`);
+  }
+
+  const decWb = await tenantClient.waybill.findFirst({
+    where: { crmDealId: decDealId }
+  });
+  if (!decWb) throw new Error('Decimal Waybill creation failed');
+  // Waybill goods total vat = 36.12 + 46.66 = 82.78, amount = 337.11 + 435.51 = 772.62
+  if (Number(decWb.vatAmount) !== 82.78 || Number(decWb.amount) !== 772.62) {
+    throw new Error(`Waybill Decimal total mismatch! Expected vatAmount=82.78, amount=772.62. Got vat=${decWb.vatAmount}, amount=${decWb.amount}`);
+  }
+
+  const decAct = await tenantClient.serviceAct.findFirst({
+    where: { crmDealId: decDealId }
+  });
+  if (!decAct) throw new Error('Decimal ServiceAct creation failed');
+  // ServiceAct total vat = 24.00, amount = 223.98
+  if (Number(decAct.vatAmount) !== 24.00 || Number(decAct.amount) !== 223.98) {
+    throw new Error(`ServiceAct Decimal total mismatch! Expected vatAmount=24.00, amount=223.98. Got vat=${decAct.vatAmount}, amount=${decAct.amount}`);
+  }
+  console.log('[Test 7 SUCCESS] Multi-item Decimal precision verified across Invoice, Waybill, and ServiceAct!');
 
   await tenantClient.$disconnect();
   console.log('=== LINE ITEM DISCOUNTS INTEGRATION TEST PASSED SUCCESSFULLY! ===');

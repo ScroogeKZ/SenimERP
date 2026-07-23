@@ -1,4 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { calculateLineAmounts, calculateLineDiscount } from './pricing.utils.js';
 import { EventBusSubscriber, EventBusPublisher, redisConnection } from '@senimerp/event-bus-client';
 import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
@@ -92,6 +94,19 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
 
     console.log(`[EventConsumer] Processing deal.won event: ${eventId} (Deal: ${dealId})`);
 
+    for (const item of items) {
+      const itemAny = item as any;
+      if (typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price < 0) {
+        throw new Error(`Invalid price for SKU ${item.sku} in deal ${dealId}: ${item.price}`);
+      }
+      if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity <= 0) {
+        throw new Error(`Invalid quantity for SKU ${item.sku} in deal ${dealId}: ${item.quantity}`);
+      }
+      if (itemAny.listPrice != null && (typeof itemAny.listPrice !== 'number' || !Number.isFinite(itemAny.listPrice) || itemAny.listPrice < 0)) {
+        throw new Error(`Invalid listPrice for SKU ${item.sku} in deal ${dealId}: ${itemAny.listPrice}`);
+      }
+    }
+
     await this.prismaService.ensureTenantSchema(tenantId);
     const db = this.prismaService.getClient(tenantId);
 
@@ -116,114 +131,39 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
         });
 
         // 1. Ensure customer exists
-      const customer = await tx.customer.upsert({
-        where: { bin: customerBin },
-        update: {
-          crmId: customerId,
-          name: customerName,
-          address: customerAddress,
-          email: customerEmail,
-          phone: customerPhone
-        },
-        create: {
-          crmId: customerId,
-          name: customerName,
-          bin: customerBin,
-          address: customerAddress,
-          email: customerEmail,
-          phone: customerPhone
-        }
-      });
-
-      // Split items into Physical Goods (Waybills) vs Services (Acts of Completed Works)
-      const physicalItems = items.filter((item: any) => !item.sku.startsWith('SRV-'));
-      const serviceItems = items.filter((item: any) => item.sku.startsWith('SRV-'));
-
-      // Calculate totals for Invoice
-      let totalVat = 0;
-      let totalAmount = 0;
-
-      // Helper for calculating line item discount metadata
-      const calculateLineDiscount = (listPrice: number | null | undefined, unitPrice: number, quantity: number) => {
-        const originalPrice = listPrice != null ? Number(listPrice) : null;
-        const discountAmount = originalPrice != null ? (originalPrice - unitPrice) * quantity : 0;
-        const discountPercent = originalPrice != null && originalPrice > 0 ? ((originalPrice - unitPrice) / originalPrice) * 100 : 0;
-        return {
-          originalPrice,
-          discountAmount: Number(discountAmount.toFixed(2)),
-          discountPercent: Number(discountPercent.toFixed(2))
-        };
-      };
-
-      const invoiceLines = items.map((item: any) => {
-        const vatRate = item.vatRate || 12; // Standard Kazakhstani VAT
-        const lineTotalExcludingVat = item.quantity * item.price;
-        const lineVat = lineTotalExcludingVat * (vatRate / 100);
-        const lineTotalIncludingVat = lineTotalExcludingVat + lineVat;
-
-        totalVat += lineVat;
-        totalAmount += lineTotalIncludingVat;
-
-        const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
-
-        return {
-          sku: item.sku,
-          crmProductId: item.crmProductId,
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price,
-          originalPrice: discountInfo.originalPrice,
-          discountAmount: discountInfo.discountAmount,
-          discountPercent: discountInfo.discountPercent,
-          dealCurrency: item.dealCurrency ?? null,
-          dealCurrencyPrice: item.dealCurrencyPrice ?? null,
-          exchangeRate: item.exchangeRate ?? null,
-          exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
-          vatRate,
-          vatAmount: lineVat,
-          totalAmount: lineTotalIncludingVat
-        };
-      });
-
-      // 2. Create payment Invoice
-      const year = new Date().getFullYear();
-      const [{ nextval: invSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
-        SELECT nextval('invoice_number_seq') as nextval;
-      `;
-      const invoiceNumber = `INV-${year}-${invSeq.toString().padStart(4, '0')}`;
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + 14); // 14 days payment term
-
-      const invoice = await tx.invoice.create({
-        data: {
-          number: invoiceNumber,
-          customerId: customer.id,
-          amount: totalAmount,
-          vatAmount: totalVat,
-          paidAmount: 0.00,
-          status: 'DRAFT',
-          dueDate,
-          crmDealId: dealId,
-          items: {
-            create: invoiceLines
+        const customer = await tx.customer.upsert({
+          where: { bin: customerBin },
+          update: {
+            crmId: customerId,
+            name: customerName,
+            address: customerAddress,
+            email: customerEmail,
+            phone: customerPhone
+          },
+          create: {
+            crmId: customerId,
+            name: customerName,
+            bin: customerBin,
+            address: customerAddress,
+            email: customerEmail,
+            phone: customerPhone
           }
-        }
-      });
-      console.log(`[EventConsumer] Draft Invoice created: ${invoice.number} (${totalAmount} KZT)`);
+        });
 
-      // 3. Create Waybill if there are physical goods
-      if (physicalItems.length > 0) {
-        let waybillVat = 0;
-        let waybillTotal = 0;
+        // Split items into Physical Goods (Waybills) vs Services (Acts of Completed Works)
+        const physicalItems = items.filter((item: any) => !item.sku.startsWith('SRV-'));
+        const serviceItems = items.filter((item: any) => item.sku.startsWith('SRV-'));
 
-        const waybillLines = physicalItems.map((item: any) => {
-          const vatRate = item.vatRate || 12;
-          const totalExcludingVat = item.quantity * item.price;
-          const vat = totalExcludingVat * (vatRate / 100);
-          const totalWithVat = totalExcludingVat + vat;
+        // Calculate totals for Invoice using Prisma.Decimal
+        let totalVat = new Prisma.Decimal(0);
+        let totalAmount = new Prisma.Decimal(0);
 
-          waybillVat += vat;
-          waybillTotal += totalWithVat;
+        const invoiceLines = items.map((item: any) => {
+          const vatRate = item.vatRate || 12; // Standard Kazakhstani VAT
+          const { vatAmount, totalAmount: lineTotal } = calculateLineAmounts(item.price, item.quantity, vatRate);
+
+          totalVat = totalVat.plus(vatAmount);
+          totalAmount = totalAmount.plus(lineTotal);
 
           const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
 
@@ -231,137 +171,209 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             sku: item.sku,
             crmProductId: item.crmProductId,
             name: item.name,
-            quantity: item.quantity,
-            price: item.price,
+            quantity: new Prisma.Decimal(item.quantity),
+            price: new Prisma.Decimal(item.price),
             originalPrice: discountInfo.originalPrice,
             discountAmount: discountInfo.discountAmount,
             discountPercent: discountInfo.discountPercent,
             dealCurrency: item.dealCurrency ?? null,
-            dealCurrencyPrice: item.dealCurrencyPrice ?? null,
-            exchangeRate: item.exchangeRate ?? null,
+            dealCurrencyPrice: item.dealCurrencyPrice != null ? new Prisma.Decimal(item.dealCurrencyPrice) : null,
+            exchangeRate: item.exchangeRate != null ? new Prisma.Decimal(item.exchangeRate) : null,
             exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
-            vatRate,
-            vatAmount: vat,
-            totalAmount: totalWithVat
+            vatRate: new Prisma.Decimal(vatRate),
+            vatAmount,
+            totalAmount: lineTotal
           };
         });
 
-        const [{ nextval: wbSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
-          SELECT nextval('waybill_number_seq') as nextval;
-        `;
-        const waybillNumber = `WAY-${year}-${wbSeq.toString().padStart(4, '0')}`;
-        const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
-        const defaultWarehouseId = defaultWarehouse?.id || 'default-main-warehouse';
+        totalVat = totalVat.toDecimalPlaces(2);
+        totalAmount = totalAmount.toDecimalPlaces(2);
 
-        await tx.waybill.create({
+        // 2. Create payment Invoice
+        const year = new Date().getFullYear();
+        const [{ nextval: invSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+          SELECT nextval('invoice_number_seq') as nextval;
+        `;
+        const invoiceNumber = `INV-${year}-${invSeq.toString().padStart(4, '0')}`;
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + 14); // 14 days payment term
+
+        const invoice = await tx.invoice.create({
           data: {
-            number: waybillNumber,
+            number: invoiceNumber,
             customerId: customer.id,
-            warehouseId: defaultWarehouseId,
-            amount: waybillTotal,
-            vatAmount: waybillVat,
+            amount: totalAmount,
+            vatAmount: totalVat,
+            paidAmount: new Prisma.Decimal(0),
             status: 'DRAFT',
+            dueDate,
             crmDealId: dealId,
             items: {
-              create: waybillLines
+              create: invoiceLines
             }
           }
         });
+        console.log(`[EventConsumer] Draft Invoice created: ${invoice.number} (${totalAmount} KZT)`);
 
-        for (const line of waybillLines) {
-          const existing = await tx.stockItem.findUnique({
-            where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } }
+        // 3. Create Waybill if there are physical goods
+        if (physicalItems.length > 0) {
+          let waybillVat = new Prisma.Decimal(0);
+          let waybillTotal = new Prisma.Decimal(0);
+
+          const waybillLines = physicalItems.map((item: any) => {
+            const vatRate = item.vatRate || 12;
+            const { vatAmount, totalAmount: lineTotal } = calculateLineAmounts(item.price, item.quantity, vatRate);
+
+            waybillVat = waybillVat.plus(vatAmount);
+            waybillTotal = waybillTotal.plus(lineTotal);
+
+            const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
+
+            return {
+              sku: item.sku,
+              crmProductId: item.crmProductId,
+              name: item.name,
+              quantity: new Prisma.Decimal(item.quantity),
+              price: new Prisma.Decimal(item.price),
+              originalPrice: discountInfo.originalPrice,
+              discountAmount: discountInfo.discountAmount,
+              discountPercent: discountInfo.discountPercent,
+              dealCurrency: item.dealCurrency ?? null,
+              dealCurrencyPrice: item.dealCurrencyPrice != null ? new Prisma.Decimal(item.dealCurrencyPrice) : null,
+              exchangeRate: item.exchangeRate != null ? new Prisma.Decimal(item.exchangeRate) : null,
+              exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
+              vatRate: new Prisma.Decimal(vatRate),
+              vatAmount,
+              totalAmount: lineTotal
+            };
           });
-          let physicalQty = 0;
-          let reservedQty = Number(line.quantity);
 
-          if (existing) {
-            physicalQty = Number(existing.quantity);
-            reservedQty = Number(existing.reserved) + Number(line.quantity);
-            await tx.stockItem.update({
-              where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } },
-              data: { reserved: { increment: line.quantity } }
-            });
-          } else {
-            await tx.stockItem.create({
-              data: { sku: line.sku, warehouseId: defaultWarehouseId, quantity: 0, reserved: line.quantity }
-            });
+          waybillVat = waybillVat.toDecimalPlaces(2);
+          waybillTotal = waybillTotal.toDecimalPlaces(2);
+
+          const [{ nextval: wbSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+            SELECT nextval('waybill_number_seq') as nextval;
+          `;
+          const waybillNumber = `WAY-${year}-${wbSeq.toString().padStart(4, '0')}`;
+          const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
+          if (!defaultWarehouse) {
+            throw new Error(
+              `Cannot process deal.won for deal ${dealId}: no default warehouse configured in the system`
+            );
           }
+          const defaultWarehouseId = defaultWarehouse.id;
 
-          if (reservedQty > physicalQty) {
-            const shortageQty = reservedQty - physicalQty;
-            console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved (${reservedQty}) exceeds physical quantity (${physicalQty}).`);
+          await tx.waybill.create({
+            data: {
+              number: waybillNumber,
+              customerId: customer.id,
+              warehouseId: defaultWarehouseId,
+              amount: waybillTotal,
+              vatAmount: waybillVat,
+              status: 'DRAFT',
+              crmDealId: dealId,
+              items: {
+                create: waybillLines
+              }
+            }
+          });
 
-            shortageEvents.push({
-              dealId,
-              sku: line.sku,
-              requestedQuantity: line.quantity,
-              physicalQuantity: physicalQty,
-              reservedQuantity: reservedQty,
-              shortageQuantity: shortageQty,
-              warehouseId: defaultWarehouseId
+          for (const line of waybillLines) {
+            const lineQty = Number(line.quantity);
+            const existing = await tx.stockItem.findUnique({
+              where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } }
             });
-          }
-        }
+            let physicalQty = 0;
+            let reservedQty = lineQty;
 
-        console.log(`[EventConsumer] Draft Waybill created: ${waybillNumber} for goods on warehouse ${defaultWarehouseId}.`);
-      }
+            if (existing) {
+              physicalQty = Number(existing.quantity);
+              reservedQty = Number(existing.reserved) + lineQty;
+              await tx.stockItem.update({
+                where: { sku_warehouseId: { sku: line.sku, warehouseId: defaultWarehouseId } },
+                data: { reserved: { increment: lineQty } }
+              });
+            } else {
+              await tx.stockItem.create({
+                data: { sku: line.sku, warehouseId: defaultWarehouseId, quantity: 0, reserved: lineQty }
+              });
+            }
 
-      // 4. Create Service Act if there are services
-      if (serviceItems.length > 0) {
-        let actVat = 0;
-        let actTotal = 0;
+            if (reservedQty > physicalQty) {
+              const shortageQty = reservedQty - physicalQty;
+              console.warn(`[EventConsumer] Over-reservation for SKU ${line.sku} at warehouse ${defaultWarehouseId}: reserved (${reservedQty}) exceeds physical quantity (${physicalQty}).`);
 
-        const actLines = serviceItems.map((item: any) => {
-          const vatRate = item.vatRate || 12;
-          const totalExcludingVat = item.quantity * item.price;
-          const vat = totalExcludingVat * (vatRate / 100);
-          const totalWithVat = totalExcludingVat + vat;
-
-          actVat += vat;
-          actTotal += totalWithVat;
-
-          const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
-
-          return {
-            sku: item.sku,
-            crmProductId: item.crmProductId,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price,
-            originalPrice: discountInfo.originalPrice,
-            discountAmount: discountInfo.discountAmount,
-            discountPercent: discountInfo.discountPercent,
-            dealCurrency: item.dealCurrency ?? null,
-            dealCurrencyPrice: item.dealCurrencyPrice ?? null,
-            exchangeRate: item.exchangeRate ?? null,
-            exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
-            vatRate,
-            vatAmount: vat,
-            totalAmount: totalWithVat
-          };
-        });
-
-        const [{ nextval: actSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
-          SELECT nextval('act_number_seq') as nextval;
-        `;
-        const actNumber = `ACT-${year}-${actSeq.toString().padStart(4, '0')}`;
-        await tx.serviceAct.create({
-          data: {
-            number: actNumber,
-            customerId: customer.id,
-            amount: actTotal,
-            vatAmount: actVat,
-            status: 'DRAFT',
-            crmDealId: dealId,
-            items: {
-              create: actLines
+              shortageEvents.push({
+                dealId,
+                sku: line.sku,
+                requestedQuantity: lineQty,
+                physicalQuantity: physicalQty,
+                reservedQuantity: reservedQty,
+                shortageQuantity: shortageQty,
+                warehouseId: defaultWarehouseId
+              });
             }
           }
-        });
-        console.log(`[EventConsumer] Draft Service Act created: ${actNumber} for services.`);
-      }
-    });
+
+          console.log(`[EventConsumer] Draft Waybill created: ${waybillNumber} for goods on warehouse ${defaultWarehouseId}.`);
+        }
+
+        // 4. Create Service Act if there are services
+        if (serviceItems.length > 0) {
+          let actVat = new Prisma.Decimal(0);
+          let actTotal = new Prisma.Decimal(0);
+
+          const actLines = serviceItems.map((item: any) => {
+            const vatRate = item.vatRate || 12;
+            const { vatAmount, totalAmount: lineTotal } = calculateLineAmounts(item.price, item.quantity, vatRate);
+
+            actVat = actVat.plus(vatAmount);
+            actTotal = actTotal.plus(lineTotal);
+
+            const discountInfo = calculateLineDiscount(item.listPrice, item.price, item.quantity);
+
+            return {
+              sku: item.sku,
+              crmProductId: item.crmProductId,
+              name: item.name,
+              quantity: new Prisma.Decimal(item.quantity),
+              price: new Prisma.Decimal(item.price),
+              originalPrice: discountInfo.originalPrice,
+              discountAmount: discountInfo.discountAmount,
+              discountPercent: discountInfo.discountPercent,
+              dealCurrency: item.dealCurrency ?? null,
+              dealCurrencyPrice: item.dealCurrencyPrice != null ? new Prisma.Decimal(item.dealCurrencyPrice) : null,
+              exchangeRate: item.exchangeRate != null ? new Prisma.Decimal(item.exchangeRate) : null,
+              exchangeRateDate: item.exchangeRateDate ? new Date(item.exchangeRateDate) : null,
+              vatRate: new Prisma.Decimal(vatRate),
+              vatAmount,
+              totalAmount: lineTotal
+            };
+          });
+
+          actVat = actVat.toDecimalPlaces(2);
+          actTotal = actTotal.toDecimalPlaces(2);
+
+          const [{ nextval: actSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+            SELECT nextval('act_number_seq') as nextval;
+          `;
+          const actNumber = `ACT-${year}-${actSeq.toString().padStart(4, '0')}`;
+          await tx.serviceAct.create({
+            data: {
+              number: actNumber,
+              customerId: customer.id,
+              amount: actTotal,
+              vatAmount: actVat,
+              status: 'DRAFT',
+              crmDealId: dealId,
+              items: {
+                create: actLines
+              }
+            }
+          });
+          console.log(`[EventConsumer] Draft Service Act created: ${actNumber} for services.`);
+        }
+      });
 
     console.log(`[EventConsumer] Event deal.won processed successfully. Database transaction completed.`);
 
