@@ -182,7 +182,8 @@ async function runCurrencyExposureTest() {
   const reportData = await reportRes.json();
   console.log(`[Test 3] Currency Exposure Report: ${JSON.stringify(reportData)}`);
 
-  const usdReport = reportData.find((r: any) => r.currency === 'USD');
+  const currenciesList = Array.isArray(reportData) ? reportData : reportData.currencies;
+  const usdReport = currenciesList.find((r: any) => r.currency === 'USD');
   if (!usdReport) throw new Error('USD currency report entry missing');
 
   // Total USD foreign amount: Invoice1 (1000 + 200 = 1200) + Waybill1 (1000) + Act1 (200) = 2400 USD
@@ -190,6 +191,126 @@ async function runCurrencyExposureTest() {
   if (usdReport.totalForeignCurrencyAmount !== 2400 || usdReport.lineItemCount !== 4) {
     throw new Error(`Expected USD total 2400 USD and 4 lines. Got ${JSON.stringify(usdReport)}`);
   }
+
+  // Step 4: Currency Mismatch Cross-Checking
+  console.log('[Test 4] Testing currency mismatch cross-check thresholds...');
+
+  // 4a: Mismatch within 1% tolerance (expected: 50000, actual: 50400 -> 0.8% deviation)
+  const deal4aId = `deal_mismatch_ok_${Date.now()}`;
+  await eventConsumer.handleDealWon({
+    eventId: `evt_mis_ok_${Date.now()}`,
+    eventType: 'deal.won',
+    tenantId,
+    timestamp: new Date().toISOString(),
+    payload: {
+      dealId: deal4aId,
+      customerId,
+      customerName: 'Клиент Небольшое Отклонение',
+      customerBin: bin,
+      amount: 50400,
+      items: [
+        {
+          sku: 'SKU-TOL-OK',
+          name: 'Товар с отклонением 0.8%',
+          quantity: 1,
+          price: 50400,
+          dealCurrency: 'EUR',
+          dealCurrencyPrice: 100.0,
+          exchangeRate: 500.0
+        }
+      ]
+    }
+  } as any);
+
+  const logOk = await tenantClient.currencyMismatchLog.findFirst({ where: { dealId: deal4aId } });
+  if (logOk) throw new Error('Deviation <= 1.0% should NOT create a CurrencyMismatchLog entry!');
+  console.log('  [4a SUCCESS] Mismatch within 1% tolerance successfully ignored without warning log.');
+
+  // 4b: Mismatch above 1% tolerance (expected: 50000, actual: 52500 -> 5.0% deviation)
+  const deal4bId = `deal_mismatch_bad_${Date.now()}`;
+  await eventConsumer.handleDealWon({
+    eventId: `evt_mis_bad_${Date.now()}`,
+    eventType: 'deal.won',
+    tenantId,
+    timestamp: new Date().toISOString(),
+    payload: {
+      dealId: deal4bId,
+      customerId,
+      customerName: 'Клиент Большое Отклонение',
+      customerBin: bin,
+      amount: 52500,
+      items: [
+        {
+          sku: 'SKU-TOL-BAD',
+          name: 'Товар с отклонением 5%',
+          quantity: 1,
+          price: 52500,
+          dealCurrency: 'EUR',
+          dealCurrencyPrice: 100.0,
+          exchangeRate: 500.0
+        }
+      ]
+    }
+  } as any);
+
+  const logBad = await tenantClient.currencyMismatchLog.findFirst({ where: { dealId: deal4bId } });
+  if (!logBad) throw new Error('Deviation > 1.0% MUST create a CurrencyMismatchLog entry!');
+  if (Number(logBad.deviationPercent) !== 5) {
+    throw new Error(`Expected deviationPercent 5. Got ${logBad.deviationPercent}`);
+  }
+  console.log(`  [4b SUCCESS] Mismatch > 1% recorded in CurrencyMismatchLog with ${logBad.deviationPercent}% deviation.`);
+
+  // Step 5: Verification of unreconciledMismatchesCount in Exposure Report
+  console.log('[Test 5] Verifying unreconciledMismatchesCount in currency exposure report...');
+  const report5Res = await fetch(`${baseUrl}/api/reports/currency-exposure`, { headers: getAuthHeaders() });
+  const report5Data = await report5Res.json();
+  if (report5Data.unreconciledMismatchesCount !== 1) {
+    throw new Error(`Expected unreconciledMismatchesCount to be 1. Got ${report5Data.unreconciledMismatchesCount}`);
+  }
+  console.log('[Test 5 SUCCESS] unreconciledMismatchesCount = 1 verified in report response.');
+
+  // Step 6: 100+ Line Items Decimal vs Float Accumulation Precision Test
+  console.log('[Test 6] Testing 100+ line items Decimal vs Float accumulation precision...');
+  const deal6Id = `deal_acc_${Date.now()}`;
+  const hundredItems = [];
+  for (let i = 0; i < 100; i++) {
+    hundredItems.push({
+      sku: `SKU-ACC-${i}`,
+      name: `Товар Накопления ${i}`,
+      quantity: 0.2,
+      price: 0.1,
+      dealCurrency: 'GBP',
+      dealCurrencyPrice: 0.1,
+      exchangeRate: 1.0
+    });
+  }
+  await eventConsumer.handleDealWon({
+    eventId: `evt_acc_${Date.now()}`,
+    eventType: 'deal.won',
+    tenantId,
+    timestamp: new Date().toISOString(),
+    payload: {
+      dealId: deal6Id,
+      customerId,
+      customerName: 'Клиент Массового Накопления',
+      customerBin: bin,
+      amount: 10,
+      items: hundredItems
+    }
+  } as any);
+
+  const report6Res = await fetch(`${baseUrl}/api/reports/currency-exposure`, { headers: getAuthHeaders() });
+  const report6Data = await report6Res.json();
+  const gbpReport = report6Data.currencies.find((r: any) => r.currency === 'GBP');
+  if (!gbpReport) throw new Error('GBP currency report entry missing');
+
+  // Float accumulation of (0.1 * 0.2) * 200 in JS yields 4.000000000000001 before rounding
+  // Decimal accumulation yields exactly 4.0000
+  console.log(`  [Test 6] GBP Foreign Accumulation Total: ${gbpReport.totalForeignCurrencyAmount} across ${gbpReport.lineItemCount} lines`);
+  if (gbpReport.totalForeignCurrencyAmount !== 4 || gbpReport.lineItemCount !== 200) {
+    throw new Error(`Expected exact Decimal total of 4.0000 GBP across 200 lines. Got ${gbpReport.totalForeignCurrencyAmount} across ${gbpReport.lineItemCount} lines`);
+  }
+  console.log('[Test 6 SUCCESS] Decimal precision verified over 200 accumulated line items without float drift!');
 
   await tenantClient.$disconnect();
   console.log('=== CURRENCY EXPOSURE INTEGRATION TEST PASSED SUCCESSFULLY! ===');

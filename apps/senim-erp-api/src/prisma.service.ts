@@ -662,6 +662,21 @@ export class TenantPrismaService implements OnModuleDestroy {
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "dealCurrencyPrice" DECIMAL(15, 4);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "exchangeRate" DECIMAL(12, 6);`);
             await tx.$executeRawUnsafe(`ALTER TABLE "${schema}"."ActLineItem" ADD COLUMN IF NOT EXISTS "exchangeRateDate" TIMESTAMP;`);
+
+            await tx.$executeRawUnsafe(`
+              CREATE TABLE IF NOT EXISTS "${schema}"."CurrencyMismatchLog" (
+                "id" TEXT PRIMARY KEY,
+                "dealId" TEXT NOT NULL,
+                "sku" TEXT NOT NULL,
+                "price" DECIMAL(15, 2) NOT NULL,
+                "dealCurrency" TEXT NOT NULL,
+                "dealCurrencyPrice" DECIMAL(15, 4) NOT NULL,
+                "exchangeRate" DECIMAL(12, 6) NOT NULL,
+                "expectedPrice" DECIMAL(15, 2) NOT NULL,
+                "deviationPercent" DECIMAL(5, 2) NOT NULL,
+                "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+            `);
           },
           {
             timeout: 30000, // Explicit 30s timeout to allow lock waiting without transaction abortion

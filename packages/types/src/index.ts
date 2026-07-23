@@ -45,11 +45,16 @@ export interface IntegrationEvent<T = any> {
 // Deal Won Event Payload (CRM -> ERP)
 export interface DealWonLineItem {
   sku: string;
-  crmProductId: string;
+  crmProductId?: string;
   name: string;
   quantity: number;
   price: number;       // Price excluding VAT
   vatRate?: number;    // e.g. 12.00 (optional, default will be 12%)
+  listPrice?: number | string;
+  dealCurrency?: string;
+  dealCurrencyPrice?: number | string;
+  exchangeRate?: number | string;
+  exchangeRateDate?: string;
 }
 
 export interface DealWonPayload {

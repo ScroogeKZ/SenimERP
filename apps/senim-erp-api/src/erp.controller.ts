@@ -2152,8 +2152,8 @@ export class ErpController {
 
     const currencyMap = new Map<string, {
       currency: string;
-      totalKztAmount: number;
-      totalForeignCurrencyAmount: number;
+      totalKztAmount: Prisma.Decimal;
+      totalForeignCurrencyAmount: Prisma.Decimal;
       lineItemCount: number;
     }>();
 
@@ -2164,19 +2164,19 @@ export class ErpController {
         if (!entry) {
           entry = {
             currency: item.dealCurrency,
-            totalKztAmount: 0,
-            totalForeignCurrencyAmount: 0,
+            totalKztAmount: new Prisma.Decimal(0),
+            totalForeignCurrencyAmount: new Prisma.Decimal(0),
             lineItemCount: 0
           };
           currencyMap.set(item.dealCurrency, entry);
         }
 
-        const kztAmt = Number(item.totalAmount || 0);
-        const foreignPrice = Number(item.dealCurrencyPrice || 0);
-        const qty = Number(item.quantity || 0);
+        const kztAmt = new Prisma.Decimal(item.totalAmount || 0);
+        const foreignPrice = new Prisma.Decimal(item.dealCurrencyPrice || 0);
+        const qty = new Prisma.Decimal(item.quantity || 0);
 
-        entry.totalKztAmount += kztAmt;
-        entry.totalForeignCurrencyAmount += foreignPrice * qty;
+        entry.totalKztAmount = entry.totalKztAmount.plus(kztAmt);
+        entry.totalForeignCurrencyAmount = entry.totalForeignCurrencyAmount.plus(foreignPrice.mul(qty));
         entry.lineItemCount += 1;
       }
     };
@@ -2201,29 +2201,43 @@ export class ErpController {
         if (!entry) {
           entry = {
             currency: item.dealCurrency,
-            totalKztAmount: 0,
-            totalForeignCurrencyAmount: 0,
+            totalKztAmount: new Prisma.Decimal(0),
+            totalForeignCurrencyAmount: new Prisma.Decimal(0),
             lineItemCount: 0
           };
           currencyMap.set(item.dealCurrency, entry);
         }
 
-        const kztAmt = Number(item.totalAmount || 0);
-        const foreignPrice = Number(item.dealCurrencyPrice || 0);
-        const qty = Number(item.quantity || 0);
+        const kztAmt = new Prisma.Decimal(item.totalAmount || 0);
+        const foreignPrice = new Prisma.Decimal(item.dealCurrencyPrice || 0);
+        const qty = new Prisma.Decimal(item.quantity || 0);
 
-        entry.totalKztAmount -= kztAmt;
-        entry.totalForeignCurrencyAmount -= foreignPrice * qty;
+        entry.totalKztAmount = entry.totalKztAmount.minus(kztAmt);
+        entry.totalForeignCurrencyAmount = entry.totalForeignCurrencyAmount.minus(foreignPrice.mul(qty));
         entry.lineItemCount += 1;
       }
     }
 
-    return Array.from(currencyMap.values()).map((r) => ({
+    const unreconciledMismatchesCount = await db.currencyMismatchLog.count({
+      where: {
+        createdAt: {
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate })
+        }
+      }
+    });
+
+    const currencies = Array.from(currencyMap.values()).map((r) => ({
       currency: r.currency,
-      totalKztAmount: Number(r.totalKztAmount.toFixed(2)),
-      totalForeignCurrencyAmount: Number(r.totalForeignCurrencyAmount.toFixed(4)),
+      totalKztAmount: Number(r.totalKztAmount.toDecimalPlaces(2).toString()),
+      totalForeignCurrencyAmount: Number(r.totalForeignCurrencyAmount.toDecimalPlaces(4).toString()),
       lineItemCount: r.lineItemCount
     }));
+
+    return {
+      currencies,
+      unreconciledMismatchesCount
+    };
   }
 
   // --- BI Reports: Module 1 (Revenue Trend) ---
@@ -2775,9 +2789,9 @@ export class ErpController {
     const discountGivenThisMonth = discountReport.reduce((acc: number, curr: any) => acc + curr.totalDiscountAmount, 0);
 
     const currencyReport = await this.getCurrencyExposureReport(undefined, undefined, req);
-    const currencyExposureCurrencies = currencyReport
-      .filter((c) => c.totalKztAmount > 0 || c.totalForeignCurrencyAmount > 0)
-      .map((c) => c.currency);
+    const currencyExposureCurrencies = currencyReport.currencies
+      .filter((c: any) => c.totalKztAmount > 0 || c.totalForeignCurrencyAmount > 0)
+      .map((c: any) => c.currency);
 
     return {
       revenueThisMonth: Number(revenueThisMonth.toFixed(2)),

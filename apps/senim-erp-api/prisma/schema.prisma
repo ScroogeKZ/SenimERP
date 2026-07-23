@@ -454,5 +454,19 @@ model TenantProfile {
   updatedAt    DateTime @updatedAt
 }
 
+model CurrencyMismatchLog {
+  id                String   @id @default(uuid())
+  dealId            String
+  sku               String
+  price             Decimal  @db.Decimal(15, 2)
+  dealCurrency      String
+  dealCurrencyPrice Decimal  @db.Decimal(15, 4)
+  exchangeRate      Decimal  @db.Decimal(12, 6)
+  expectedPrice     Decimal  @db.Decimal(15, 2)
+  deviationPercent  Decimal  @db.Decimal(5, 2)
+  createdAt         DateTime @default(now())
+}
+
+
 
 

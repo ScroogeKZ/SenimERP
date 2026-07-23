@@ -2,8 +2,10 @@ import { Injectable, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 import { calculateLineAmounts, calculateLineDiscount } from './pricing.utils.js';
 import { EventBusSubscriber, EventBusPublisher, redisConnection } from '@senimerp/event-bus-client';
-import { DealWonPayload, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
+import { DealWonPayload, DealWonLineItem, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
+
+export const CURRENCY_MISMATCH_TOLERANCE_PERCENT = 1.0;
 
 @Injectable()
 export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
@@ -94,16 +96,51 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
 
     console.log(`[EventConsumer] Processing deal.won event: ${eventId} (Deal: ${dealId})`);
 
+    const currencyMismatches: Array<{
+      sku: string;
+      price: Prisma.Decimal;
+      dealCurrency: string;
+      dealCurrencyPrice: Prisma.Decimal;
+      exchangeRate: Prisma.Decimal;
+      expectedPrice: Prisma.Decimal;
+      deviationPercent: Prisma.Decimal;
+    }> = [];
+
     for (const item of items) {
-      const itemAny = item as any;
-      if (typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price < 0) {
-        throw new Error(`Invalid price for SKU ${item.sku} in deal ${dealId}: ${item.price}`);
+      const itemTyped = item as DealWonLineItem;
+      if (typeof itemTyped.price !== 'number' || !Number.isFinite(itemTyped.price) || itemTyped.price < 0) {
+        throw new Error(`Invalid price for SKU ${itemTyped.sku} in deal ${dealId}: ${itemTyped.price}`);
       }
-      if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity <= 0) {
-        throw new Error(`Invalid quantity for SKU ${item.sku} in deal ${dealId}: ${item.quantity}`);
+      if (typeof itemTyped.quantity !== 'number' || !Number.isFinite(itemTyped.quantity) || itemTyped.quantity <= 0) {
+        throw new Error(`Invalid quantity for SKU ${itemTyped.sku} in deal ${dealId}: ${itemTyped.quantity}`);
       }
-      if (itemAny.listPrice != null && (typeof itemAny.listPrice !== 'number' || !Number.isFinite(itemAny.listPrice) || itemAny.listPrice < 0)) {
-        throw new Error(`Invalid listPrice for SKU ${item.sku} in deal ${dealId}: ${itemAny.listPrice}`);
+      if (itemTyped.listPrice != null && (typeof itemTyped.listPrice !== 'number' && typeof itemTyped.listPrice !== 'string' || (typeof itemTyped.listPrice === 'number' && (!Number.isFinite(itemTyped.listPrice) || itemTyped.listPrice < 0)))) {
+        throw new Error(`Invalid listPrice for SKU ${itemTyped.sku} in deal ${dealId}: ${itemTyped.listPrice}`);
+      }
+
+      // Currency cross-check if dealCurrency is present and not KZT
+      if (itemTyped.dealCurrency && itemTyped.dealCurrency !== 'KZT' && itemTyped.dealCurrencyPrice != null && itemTyped.exchangeRate != null) {
+        const fxPrice = new Prisma.Decimal(itemTyped.dealCurrencyPrice);
+        const fxRate = new Prisma.Decimal(itemTyped.exchangeRate);
+        const expectedPrice = fxPrice.mul(fxRate).toDecimalPlaces(2);
+        const actualPrice = new Prisma.Decimal(itemTyped.price);
+
+        if (expectedPrice.gt(0)) {
+          const diff = actualPrice.minus(expectedPrice).abs();
+          const devPercent = diff.div(expectedPrice).mul(100).toDecimalPlaces(2);
+          if (devPercent.toNumber() > CURRENCY_MISMATCH_TOLERANCE_PERCENT) {
+            console.warn(`[CurrencyMismatch] Deal ${dealId}, SKU ${itemTyped.sku}: price (${actualPrice}) differs from expected (${expectedPrice} = ${fxPrice} ${itemTyped.dealCurrency} x ${fxRate}) by ${devPercent}% (tolerance: ${CURRENCY_MISMATCH_TOLERANCE_PERCENT}%)`);
+            currencyMismatches.push({
+              sku: itemTyped.sku,
+              price: actualPrice,
+              dealCurrency: itemTyped.dealCurrency,
+              dealCurrencyPrice: fxPrice,
+              exchangeRate: fxRate,
+              expectedPrice,
+              deviationPercent: devPercent
+            });
+          }
+        }
       }
     }
 
@@ -372,6 +409,21 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
             }
           });
           console.log(`[EventConsumer] Draft Service Act created: ${actNumber} for services.`);
+        }
+
+        for (const mismatch of currencyMismatches) {
+          await tx.currencyMismatchLog.create({
+            data: {
+              dealId,
+              sku: mismatch.sku,
+              price: mismatch.price,
+              dealCurrency: mismatch.dealCurrency,
+              dealCurrencyPrice: mismatch.dealCurrencyPrice,
+              exchangeRate: mismatch.exchangeRate,
+              expectedPrice: mismatch.expectedPrice,
+              deviationPercent: mismatch.deviationPercent
+            }
+          });
         }
       });
 
