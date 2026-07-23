@@ -297,6 +297,112 @@ async function runRmaTest() {
   if (draftRmaRes.ok) throw new Error('RMA for non-DELIVERED waybill should fail!');
   console.log(`  [7e SUCCESS] Rejected with HTTP ${draftRmaRes.status}: ${(await draftRmaRes.json()).message}`);
 
+  // Step 8: Concurrent RMA creation test (Race condition protection)
+  console.log('[Test 8] Testing concurrent RMA creation race condition protection...');
+  const concSku = `SKU-CONC-${Date.now()}`;
+  const concWaybillId = `wb_conc_${Date.now()}`;
+  const concWaybillNum = `WAY-CONC-${Date.now()}`;
+
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Waybill" (id, number, "customerId", "warehouseId", amount, "vatAmount", status)
+    VALUES ('${concWaybillId}', '${concWaybillNum}', '${customerId}', '${defaultWarehouseId}', 20000, 2400, 'DELIVERED');
+  `);
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('line_conc_${Date.now()}', '${concWaybillId}', '${concSku}', 'Гонка Товар', 20, 1000, 12, 2400, 22400);
+  `);
+
+  const reqA = fetch(`${baseUrl}/api/rma`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ waybillId: concWaybillId, reason: 'Гонка A', items: [{ sku: concSku, quantity: 15 }] })
+  });
+  const reqB = fetch(`${baseUrl}/api/rma`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ waybillId: concWaybillId, reason: 'Гонка B', items: [{ sku: concSku, quantity: 15 }] })
+  });
+
+  const [resA, resB] = await Promise.all([reqA, reqB]);
+  const successCount = (resA.ok ? 1 : 0) + (resB.ok ? 1 : 0);
+  const failCount = (resA.status === 400 ? 1 : 0) + (resB.status === 400 ? 1 : 0);
+
+  if (successCount !== 1 || failCount !== 1) {
+    throw new Error(`Race condition check failed! Expected 1 success and 1 HTTP 400 failure. Got successCount=${successCount}, failCount=${failCount}`);
+  }
+  console.log('[Test 8 SUCCESS] Concurrent RMA requests correctly serialized; 1 succeeded and 1 was rejected with HTTP 400.');
+
+  // Step 9: Decimal calculation precision test (Fractional pricing)
+  console.log('[Test 9] Testing Decimal calculation precision for fractional amounts...');
+  const decSku = `SKU-DEC-${Date.now()}`;
+  const decWaybillId = `wb_dec_${Date.now()}`;
+  const decWaybillNum = `WAY-DEC-${Date.now()}`;
+
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Waybill" (id, number, "customerId", "warehouseId", amount, "vatAmount", status)
+    VALUES ('${decWaybillId}', '${decWaybillNum}', '${customerId}', '${defaultWarehouseId}', 300.99, 36.12, 'DELIVERED');
+  `);
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('line_dec_${Date.now()}', '${decWaybillId}', '${decSku}', 'Дробный Товар', 10, 100.33, 12, 36.12, 337.11);
+  `);
+
+  const decRmaRes = await fetch(`${baseUrl}/api/rma`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ waybillId: decWaybillId, reason: 'Точные расчеты Decimal', items: [{ sku: decSku, quantity: 3 }] })
+  });
+  if (!decRmaRes.ok) throw new Error(`Create Decimal RMA failed: ${await decRmaRes.text()}`);
+  const decRma = await decRmaRes.json();
+  const line = decRma.lines[0];
+  if (Number(line.vatAmount) !== 36.12 || Number(line.totalAmount) !== 337.11) {
+    throw new Error(`Decimal precision mismatch on RMA line! Expected vatAmount=36.12, totalAmount=337.11. Got vat=${line.vatAmount}, total=${line.totalAmount}`);
+  }
+
+  const decConfirmRes = await fetch(`${baseUrl}/api/rma/${decRma.id}/confirm`, {
+    method: 'POST',
+    headers: getAuthHeaders()
+  });
+  if (!decConfirmRes.ok) throw new Error(`Confirm Decimal RMA failed: ${await decConfirmRes.text()}`);
+  const decConfirmedData = await decConfirmRes.json();
+  const cnItem = decConfirmedData.creditNote.items[0];
+  if (Number(cnItem.vatAmount) !== 36.12 || Number(cnItem.totalAmount) !== 337.11) {
+    throw new Error(`Decimal precision mismatch on CreditNote item! Expected vatAmount=36.12, totalAmount=337.11. Got vat=${cnItem.vatAmount}, total=${cnItem.totalAmount}`);
+  }
+  console.log('[Test 9 SUCCESS] Decimal precision verified accurately for RMA line and CreditNote item.');
+
+  // Step 10: Warehouse fallback check (Missing warehouse -> HTTP 400)
+  console.log('[Test 10] Testing missing warehouse fallback (should return HTTP 400)...');
+  await tenantClient.$executeRawUnsafe(`UPDATE "${schemaName}"."Warehouse" SET "isDefault" = false;`);
+
+  const noWhWaybillId = `wb_nowh_${Date.now()}`;
+  const noWhWaybillNum = `WAY-NOWH-${Date.now()}`;
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."Waybill" (id, number, "customerId", "warehouseId", amount, "vatAmount", status)
+    VALUES ('${noWhWaybillId}', '${noWhWaybillNum}', '${customerId}', NULL, 10000, 1200, 'DELIVERED');
+  `);
+  await tenantClient.$executeRawUnsafe(`
+    INSERT INTO "${schemaName}"."WaybillLineItem" (id, "waybillId", sku, name, quantity, price, "vatRate", "vatAmount", "totalAmount")
+    VALUES ('line_nowh_${Date.now()}', '${noWhWaybillId}', '${sku}', 'Товар Без Склада', 10, 1000, 12, 1200, 11200);
+  `);
+
+  const noWhRmaRes = await fetch(`${baseUrl}/api/rma`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ waybillId: noWhWaybillId, items: [{ sku, quantity: 2 }] })
+  });
+  if (noWhRmaRes.ok) {
+    throw new Error('RMA creation for waybill without warehouse & default warehouse expected to fail with 400, but succeeded!');
+  }
+  if (noWhRmaRes.status !== 400) {
+    throw new Error(`Expected HTTP status 400 for missing warehouse, got ${noWhRmaRes.status}`);
+  }
+  const noWhErr = await noWhRmaRes.json();
+  if (!noWhErr.message?.includes('Cannot determine target warehouse')) {
+    throw new Error(`Expected error message to mention 'Cannot determine target warehouse', got: ${JSON.stringify(noWhErr)}`);
+  }
+  console.log(`[Test 10 SUCCESS] Missing warehouse RMA creation rejected with HTTP 400: ${noWhErr.message}`);
+
   await tenantClient.$disconnect();
   console.log('=== RMA (RETURNS) INTEGRATION TEST PASSED SUCCESSFULLY! ===');
   await app.close();

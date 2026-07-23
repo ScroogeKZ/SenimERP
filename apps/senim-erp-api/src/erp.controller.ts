@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Req, NotFoundException, BadRequestException, ConflictException, NotImplementedException, Inject } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { AuthGuard, RequestWithUser } from './auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
 import { Roles } from './roles.decorator.js';
@@ -497,6 +498,21 @@ export class ErpController {
 
   // --- RMA (Returns) ---
 
+  private calculateLineAmounts(
+    price: Prisma.Decimal | number | string,
+    qty: Prisma.Decimal | number | string,
+    vatRate: Prisma.Decimal | number | string
+  ) {
+    const priceDecimal = new Prisma.Decimal(price);
+    const qtyDecimal = new Prisma.Decimal(qty);
+    const vatRateDecimal = new Prisma.Decimal(vatRate);
+
+    const lineVat = priceDecimal.mul(qtyDecimal).mul(vatRateDecimal).div(100).toDecimalPlaces(2);
+    const lineTotal = priceDecimal.mul(qtyDecimal).plus(lineVat).toDecimalPlaces(2);
+
+    return { vatAmount: lineVat, totalAmount: lineTotal };
+  }
+
   @Roles('ERP_ACCOUNTANT', 'ERP_WAREHOUSE_MANAGER', 'ERP_CEO')
   @Post('rma')
   async createRma(
@@ -513,91 +529,100 @@ export class ErpController {
     }
 
     const db = await this.getDb(req);
-    const waybill = await db.waybill.findUnique({
-      where: { id: waybillId },
-      include: {
-        items: true,
-        rmas: {
-          include: { lines: true }
+
+    return db.$transaction(async (tx: any) => {
+      await tx.$queryRaw`SELECT id FROM "Waybill" WHERE id = ${waybillId} FOR UPDATE`;
+
+      const waybill = await tx.waybill.findUnique({
+        where: { id: waybillId },
+        include: {
+          items: true,
+          rmas: {
+            include: { lines: true }
+          }
         }
+      });
+
+      if (!waybill) {
+        throw new NotFoundException('Waybill not found');
       }
-    });
-
-    if (!waybill) {
-      throw new NotFoundException('Waybill not found');
-    }
-    if (waybill.status !== 'DELIVERED') {
-      throw new BadRequestException('Returns are only allowed for DELIVERED waybills');
-    }
-
-    const defaultWarehouse = await db.warehouse.findFirst({ where: { isDefault: true } });
-    const targetWarehouseId = waybill.warehouseId || defaultWarehouse?.id || 'default-main-warehouse';
-
-    for (const item of items) {
-      if (!item.sku || typeof item.quantity !== 'number' || item.quantity <= 0) {
-        throw new BadRequestException(`Invalid return item format or non-positive quantity for SKU ${item.sku}`);
+      if (waybill.status !== 'DELIVERED') {
+        throw new BadRequestException('Returns are only allowed for DELIVERED waybills');
       }
 
-      const shippedItem = waybill.items.find((i: any) => i.sku === item.sku);
-      if (!shippedItem) {
-        throw new BadRequestException(`SKU ${item.sku} was not shipped in waybill ${waybill.number}`);
+      const defaultWarehouse = await tx.warehouse.findFirst({ where: { isDefault: true } });
+      const targetWarehouseId = waybill.warehouseId || defaultWarehouse?.id;
+      if (!targetWarehouseId) {
+        throw new BadRequestException(
+          'Cannot determine target warehouse for return: waybill has no assigned warehouse and no default warehouse is configured in the system'
+        );
       }
 
-      const shippedQty = Number(shippedItem.quantity);
-      let existingReturnedQty = 0;
+      for (const item of items) {
+        if (!item.sku || typeof item.quantity !== 'number' || item.quantity <= 0) {
+          throw new BadRequestException(`Invalid return item format or non-positive quantity for SKU ${item.sku}`);
+        }
 
-      for (const rma of waybill.rmas) {
-        if (rma.status === 'DRAFT' || rma.status === 'CONFIRMED') {
-          for (const line of rma.lines) {
-            if (line.sku === item.sku) {
-              existingReturnedQty += Number(line.quantity);
+        const shippedItem = waybill.items.find((i: any) => i.sku === item.sku);
+        if (!shippedItem) {
+          throw new BadRequestException(`SKU ${item.sku} was not shipped in waybill ${waybill.number}`);
+        }
+
+        const shippedQty = Number(shippedItem.quantity);
+        let existingReturnedQty = 0;
+
+        for (const rma of waybill.rmas) {
+          if (rma.status === 'DRAFT' || rma.status === 'CONFIRMED') {
+            for (const line of rma.lines) {
+              if (line.sku === item.sku) {
+                existingReturnedQty += Number(line.quantity);
+              }
             }
           }
         }
-      }
 
-      if (existingReturnedQty + item.quantity > shippedQty) {
-        throw new BadRequestException(
-          `Return quantity ${item.quantity} for SKU ${item.sku} exceeds max allowable return of ${shippedQty - existingReturnedQty} (shipped: ${shippedQty}, already in RMA: ${existingReturnedQty})`
-        );
-      }
-    }
-
-    const year = new Date().getFullYear();
-    const [{ nextval: rmaSeq }] = await db.$queryRaw<Array<{ nextval: bigint }>>`
-      SELECT nextval('rma_number_seq') as nextval;
-    `;
-    const rmaNumber = `RMA-${year}-${rmaSeq.toString().padStart(4, '0')}`;
-
-    return db.rma.create({
-      data: {
-        number: rmaNumber,
-        waybillId,
-        reason: reason || null,
-        status: 'DRAFT',
-        lines: {
-          create: items.map((i) => {
-            const shippedItem = waybill.items.find((si: any) => si.sku === i.sku);
-            const price = Number(shippedItem?.price || 0);
-            const vatRate = Number(shippedItem?.vatRate || 0);
-            const qty = Number(i.quantity);
-            const lineVat = Number((price * qty * (vatRate / 100)).toFixed(2));
-            const lineTotal = Number((price * qty + lineVat).toFixed(2));
-            return {
-              sku: i.sku,
-              warehouseId: targetWarehouseId,
-              quantity: qty,
-              price,
-              vatRate,
-              vatAmount: lineVat,
-              totalAmount: lineTotal
-            };
-          })
+        if (existingReturnedQty + item.quantity > shippedQty) {
+          throw new BadRequestException(
+            `Return quantity ${item.quantity} for SKU ${item.sku} exceeds max allowable return of ${shippedQty - existingReturnedQty} (shipped: ${shippedQty}, already in RMA: ${existingReturnedQty})`
+          );
         }
-      },
-      include: {
-        lines: true
       }
+
+      const year = new Date().getFullYear();
+      const [{ nextval: rmaSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
+        SELECT nextval('rma_number_seq') as nextval;
+      `;
+      const rmaNumber = `RMA-${year}-${rmaSeq.toString().padStart(4, '0')}`;
+
+      return tx.rma.create({
+        data: {
+          number: rmaNumber,
+          waybillId,
+          reason: reason || null,
+          status: 'DRAFT',
+          lines: {
+            create: items.map((i) => {
+              const shippedItem = waybill.items.find((si: any) => si.sku === i.sku);
+              const price = shippedItem?.price ?? 0;
+              const vatRate = shippedItem?.vatRate ?? 0;
+              const qty = i.quantity;
+              const { vatAmount, totalAmount } = this.calculateLineAmounts(price, qty, vatRate);
+              return {
+                sku: i.sku,
+                warehouseId: targetWarehouseId,
+                quantity: qty,
+                price: new Prisma.Decimal(price),
+                vatRate: new Prisma.Decimal(vatRate),
+                vatAmount,
+                totalAmount
+              };
+            })
+          }
+        },
+        include: {
+          lines: true
+        }
+      });
     });
   }
 
@@ -677,21 +702,22 @@ export class ErpController {
         : [];
       const invoice = invoices.length > 0 ? invoices[0] : null;
 
-      let cnAmount = 0;
-      let cnVatAmount = 0;
+      let cnAmount = new Prisma.Decimal(0);
+      let cnVatAmount = new Prisma.Decimal(0);
       for (const line of rma.lines) {
         const wbItem = rma.waybill?.items?.find((wi: any) => wi.sku === line.sku);
-        const price = line.price != null ? Number(line.price) : Number(wbItem?.price || 0);
-        const vatRate = line.vatRate != null ? Number(line.vatRate) : Number(wbItem?.vatRate || 0);
-        const qty = Number(line.quantity);
-        const lineVat = line.vatAmount != null ? Number(line.vatAmount) : Number((price * qty * (vatRate / 100)).toFixed(2));
-        const lineTotal = line.totalAmount != null ? Number(line.totalAmount) : Number((price * qty + lineVat).toFixed(2));
+        const price = line.price != null ? line.price : (wbItem?.price ?? 0);
+        const vatRate = line.vatRate != null ? line.vatRate : (wbItem?.vatRate ?? 0);
+        const qty = line.quantity;
+        const { vatAmount, totalAmount } = (line.vatAmount != null && line.totalAmount != null)
+          ? { vatAmount: new Prisma.Decimal(line.vatAmount), totalAmount: new Prisma.Decimal(line.totalAmount) }
+          : this.calculateLineAmounts(price, qty, vatRate);
 
-        cnAmount += lineTotal;
-        cnVatAmount += lineVat;
+        cnAmount = cnAmount.plus(totalAmount);
+        cnVatAmount = cnVatAmount.plus(vatAmount);
       }
-      cnAmount = Number(cnAmount.toFixed(2));
-      cnVatAmount = Number(cnVatAmount.toFixed(2));
+      cnAmount = cnAmount.toDecimalPlaces(2);
+      cnVatAmount = cnVatAmount.toDecimalPlaces(2);
 
       const year = new Date().getFullYear();
       const [{ nextval: cnSeq }] = await tx.$queryRaw<Array<{ nextval: bigint }>>`
@@ -711,29 +737,33 @@ export class ErpController {
           items: {
             create: rma.lines.map((line: any) => {
               const wbItem = rma.waybill?.items?.find((wi: any) => wi.sku === line.sku);
-              const price = line.price != null ? Number(line.price) : Number(wbItem?.price || 0);
-              const vatRate = line.vatRate != null ? Number(line.vatRate) : Number(wbItem?.vatRate || 0);
-              const qty = Number(line.quantity);
-              const lineVat = line.vatAmount != null ? Number(line.vatAmount) : Number((price * qty * (vatRate / 100)).toFixed(2));
-              const lineTotal = line.totalAmount != null ? Number(line.totalAmount) : Number((price * qty + lineVat).toFixed(2));
+              const price = line.price != null ? line.price : (wbItem?.price ?? 0);
+              const vatRate = line.vatRate != null ? line.vatRate : (wbItem?.vatRate ?? 0);
+              const qty = line.quantity;
+              const { vatAmount, totalAmount } = (line.vatAmount != null && line.totalAmount != null)
+                ? { vatAmount: new Prisma.Decimal(line.vatAmount), totalAmount: new Prisma.Decimal(line.totalAmount) }
+                : this.calculateLineAmounts(price, qty, vatRate);
 
-              const wbQty = Number(wbItem?.quantity || 0);
-              const wbDiscount = Number(wbItem?.discountAmount || 0);
-              const proratedDiscount = wbQty > 0 ? Number((wbDiscount * (qty / wbQty)).toFixed(2)) : 0;
+              const wbQty = new Prisma.Decimal(wbItem?.quantity ?? 0);
+              const wbDiscount = new Prisma.Decimal(wbItem?.discountAmount ?? 0);
+              const qtyDecimal = new Prisma.Decimal(qty);
+              const proratedDiscount = wbQty.gt(0)
+                ? wbDiscount.mul(qtyDecimal).div(wbQty).toDecimalPlaces(2)
+                : new Prisma.Decimal(0);
 
               return {
                 sku: line.sku,
                 crmProductId: wbItem?.crmProductId || null,
                 name: wbItem?.name || line.sku,
-                quantity: qty,
-                price,
-                vatRate,
-                vatAmount: lineVat,
-                totalAmount: lineTotal,
+                quantity: qtyDecimal,
+                price: new Prisma.Decimal(price),
+                vatRate: new Prisma.Decimal(vatRate),
+                vatAmount,
+                totalAmount,
                 discountAmount: proratedDiscount,
                 dealCurrency: wbItem?.dealCurrency || null,
-                dealCurrencyPrice: wbItem?.dealCurrencyPrice != null ? Number(wbItem.dealCurrencyPrice) : null,
-                exchangeRate: wbItem?.exchangeRate != null ? Number(wbItem.exchangeRate) : null,
+                dealCurrencyPrice: wbItem?.dealCurrencyPrice != null ? new Prisma.Decimal(wbItem.dealCurrencyPrice) : null,
+                exchangeRate: wbItem?.exchangeRate != null ? new Prisma.Decimal(wbItem.exchangeRate) : null,
                 exchangeRateDate: wbItem?.exchangeRateDate || null
               };
             })
