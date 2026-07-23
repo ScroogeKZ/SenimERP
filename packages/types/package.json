@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/schemas/v1', {recursive: true}); fs.copyFileSync('schemas/v1/deal-won-line-item.schema.json', 'dist/schemas/v1/deal-won-line-item.schema.json');\""
   },
   "devDependencies": {
     "typescript": "^5.4.5"

@@ -42,7 +42,12 @@ export interface IntegrationEvent<T = any> {
   payload: T;
 }
 
-// Deal Won Event Payload (CRM -> ERP)
+/**
+ * Deal Won Event Line Item Payload (CRM -> ERP).
+ * @see JSON Schema: packages/types/schemas/v1/deal-won-line-item.schema.json
+ * ($id: https://senimerp.kz/schemas/v1/deal-won-line-item.schema.json)
+ * MUST remain strictly synchronized with deal-won-line-item.schema.json.
+ */
 export interface DealWonLineItem {
   sku: string;
   crmProductId?: string;

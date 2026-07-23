@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://senimerp.kz/schemas/v1/deal-won-line-item.schema.json",
+  "title": "DealWonLineItem",
+  "description": "Schema contract for a single line item in deal.won event payload between SenimCRM and SenimERP",
+  "type": "object",
+  "required": [
+    "sku",
+    "name",
+    "quantity",
+    "price"
+  ],
+  "properties": {
+    "sku": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stock Keeping Unit referencing catalog"
+    },
+    "crmProductId": {
+      "type": "string",
+      "description": "Optional direct CRM product ID reference"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Product or service name snapshot"
+    },
+    "quantity": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Item quantity, must be greater than zero"
+    },
+    "price": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Unit price excluding VAT in KZT, must be non-negative"
+    },
+    "vatRate": {
+      "type": "number",
+      "minimum": 0,
+      "description": "VAT percentage e.g. 12.00"
+    },
+    "listPrice": {
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+      ],
+      "description": "Original catalog list price before discount"
+    },
+    "dealCurrency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 3-letter currency code (e.g. USD, EUR, KZT)"
+    },
+    "dealCurrencyPrice": {
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+      ],
+      "description": "Price in foreign currency"
+    },
+    "exchangeRate": {
+      "oneOf": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+      ],
+      "description": "Exchange rate from deal currency to KZT"
+    },
+    "exchangeRateDate": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of exchange rate date"
+    }
+  },
+  "additionalProperties": true
+}

@@ -4,8 +4,50 @@ import { calculateLineAmounts, calculateLineDiscount } from './pricing.utils.js'
 import { EventBusSubscriber, EventBusPublisher, redisConnection } from '@senimerp/event-bus-client';
 import { DealWonPayload, DealWonLineItem, ClientSyncedPayload, IntegrationEvent, RefundConfirmedPayload, StockShortageDetectedPayload } from '@senimerp/types';
 import { TenantPrismaService } from './prisma.service.js';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 
 export const CURRENCY_MISMATCH_TOLERANCE_PERCENT = 1.0;
+
+function loadDealWonLineItemSchema() {
+  const possiblePaths = [
+    resolve(process.cwd(), 'packages/types/schemas/v1/deal-won-line-item.schema.json'),
+    resolve(process.cwd(), '../../packages/types/schemas/v1/deal-won-line-item.schema.json'),
+    resolve(process.cwd(), 'node_modules/@senimerp/types/dist/schemas/v1/deal-won-line-item.schema.json')
+  ];
+  for (const p of possiblePaths) {
+    if (existsSync(p)) {
+      return JSON.parse(readFileSync(p, 'utf-8'));
+    }
+  }
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://senimerp.kz/schemas/v1/deal-won-line-item.schema.json",
+    type: "object",
+    required: ["sku", "name", "quantity", "price"],
+    properties: {
+      sku: { type: "string", minLength: 1 },
+      crmProductId: { type: "string" },
+      name: { type: "string", minLength: 1 },
+      quantity: { type: "number", exclusiveMinimum: 0 },
+      price: { type: "number", minimum: 0 },
+      vatRate: { type: "number", minimum: 0 },
+      listPrice: { oneOf: [{ type: "number", minimum: 0 }, { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }] },
+      dealCurrency: { type: "string", pattern: "^[A-Z]{3}$" },
+      dealCurrencyPrice: { oneOf: [{ type: "number", minimum: 0 }, { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }] },
+      exchangeRate: { oneOf: [{ type: "number", exclusiveMinimum: 0 }, { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }] },
+      exchangeRateDate: { type: "string", format: "date-time" }
+    },
+    additionalProperties: true
+  };
+}
+
+const ajvInstance = new (Ajv2020 as any)({ allErrors: true, strict: false });
+(addFormats as any)(ajvInstance);
+export const dealWonLineItemSchema = loadDealWonLineItemSchema();
+export const validateDealWonLineItem = ajvInstance.compile(dealWonLineItemSchema);
 
 @Injectable()
 export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
@@ -107,6 +149,15 @@ export class EventConsumerService implements OnModuleInit, OnModuleDestroy {
     }> = [];
 
     for (const item of items) {
+      const isValid = validateDealWonLineItem(item);
+      if (!isValid) {
+        const errorDetails = validateDealWonLineItem.errors
+          ?.map((e: any) => `${e.instancePath || 'root'} ${e.message}`)
+          .join('; ');
+        console.error(`[SchemaValidation] Invalid deal.won line item in deal ${dealId}, SKU ${(item as any)?.sku}: ${errorDetails}`);
+        throw new Error(`[SchemaValidation] Invalid deal.won line item in deal ${dealId}: ${errorDetails}`);
+      }
+
       const itemTyped = item as DealWonLineItem;
       if (typeof itemTyped.price !== 'number' || !Number.isFinite(itemTyped.price) || itemTyped.price < 0) {
         throw new Error(`Invalid price for SKU ${itemTyped.sku} in deal ${dealId}: ${itemTyped.price}`);
